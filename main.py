@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Form
 from fastapi.responses import PlainTextResponse
 from twilio.twiml.messaging_response import MessagingResponse
@@ -7,7 +9,22 @@ from services.formatter import format_yesterday_sales_report
 from services.message_router import route_message
 from services.yesterday_sales import get_yesterday_sales_report
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("Loading Auberry workbook into memory...")
+
+    data = load_auberry_workbook()
+
+    print(
+        "Workbook loaded successfully:",
+        f"{len(data['sales'])} sales rows",
+    )
+
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 
 @app.get("/")
@@ -44,10 +61,12 @@ def yesterday_sales_message():
 
 
 @app.post("/whatsapp")
-async def whatsapp(
-    Body: str = Form(...)
-):
+async def whatsapp(Body: str = Form(...)):
+    print("Incoming WhatsApp message:", Body)
+
     reply = route_message(Body)
+
+    print("WhatsApp reply generated successfully.")
 
     response = MessagingResponse()
     response.message(reply)
