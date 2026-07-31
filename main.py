@@ -1,5 +1,7 @@
 from fastapi import FastAPI
+
 from services.data_loader import load_auberry_workbook
+from services.yesterday_sales import get_yesterday_sales_report
 
 app = FastAPI()
 
@@ -20,5 +22,15 @@ def test_data():
     return {
         "sales_rows": len(data["sales"]),
         "store_rows": len(data["store_info"]),
-        "category_rows": len(data["item_category"])
+        "category_rows": len(data["item_category"]),
     }
+
+
+@app.get("/yesterday")
+def yesterday_sales():
+
+    data = load_auberry_workbook()
+
+    report = get_yesterday_sales_report(data)
+
+    return report
