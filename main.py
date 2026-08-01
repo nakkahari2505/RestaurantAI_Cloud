@@ -133,7 +133,14 @@ async def whatsapp(
             public_media_url,
         )
 
+        print("=" * 80)
+        print("MEDIA URL")
+        print(public_media_url)
+        print("=" * 80)
+
         message.media(public_media_url)
+
+        print("Media added to Twilio response.")
 
     return PlainTextResponse(
         content=str(response),
