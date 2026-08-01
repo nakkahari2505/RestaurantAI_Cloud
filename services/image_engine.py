@@ -4,9 +4,11 @@ from PIL import Image, ImageDraw, ImageFont
 
 
 FONT_CANDIDATES = [
-    # Railway / Linux
+    # Common Linux / Railway paths
     Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
     Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+    Path("/usr/share/fonts/dejavu/DejaVuSans.ttf"),
+    Path("/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf"),
 
     # Windows
     Path("C:/Windows/Fonts/arial.ttf"),
@@ -14,15 +16,24 @@ FONT_CANDIDATES = [
 ]
 
 
-def find_font_path(bold: bool = False) -> Path:
+def find_font_path(
+    bold: bool = False,
+) -> Path | None:
     """
-    Find a font that works both locally on Windows
-    and in the Railway Linux environment.
+    Find a usable TrueType font on Windows or Linux.
+
+    Returns None when no supported system font exists.
     """
     preferred_names = (
-        ["DejaVuSans-Bold.ttf", "arialbd.ttf"]
+        [
+            "DejaVuSans-Bold.ttf",
+            "arialbd.ttf",
+        ]
         if bold
-        else ["DejaVuSans.ttf", "arial.ttf"]
+        else [
+            "DejaVuSans.ttf",
+            "arial.ttf",
+        ]
     )
 
     for preferred_name in preferred_names:
@@ -34,34 +45,47 @@ def find_font_path(bold: bool = False) -> Path:
             ):
                 return font_path
 
-    raise FileNotFoundError(
-        "No supported font was found. "
-        "Expected DejaVu Sans on Railway or Arial on Windows."
-    )
+    return None
 
 
 def load_font(
     size: int,
     bold: bool = False,
-) -> ImageFont.FreeTypeFont:
+):
     """
-    Load a TrueType font using a local system font.
-    """
-    font_path = find_font_path(bold=bold)
+    Load a TrueType font when available.
 
-    return ImageFont.truetype(
-        str(font_path),
-        size=size,
+    If the Railway container has no supported system font,
+    fall back to Pillow's built-in font instead of crashing.
+    """
+    font_path = find_font_path(
+        bold=bold,
     )
+
+    if font_path is not None:
+        return ImageFont.truetype(
+            str(font_path),
+            size=size,
+        )
+
+    print(
+        "Warning: No supported system font found. "
+        "Using Pillow default font."
+    )
+
+    return ImageFont.load_default()
 
 
 def create_canvas(
     width: int,
     height: int,
     background: str = "white",
-) -> tuple[Image.Image, ImageDraw.ImageDraw]:
+) -> tuple[
+    Image.Image,
+    ImageDraw.ImageDraw,
+]:
     """
-    Create a blank image and its drawing object.
+    Create a blank image and drawing context.
     """
     image = Image.new(
         "RGB",
@@ -77,10 +101,10 @@ def create_canvas(
 def get_text_width(
     draw: ImageDraw.ImageDraw,
     text: str,
-    font: ImageFont.FreeTypeFont,
+    font,
 ) -> int:
     """
-    Return the rendered width of a text value.
+    Return rendered text width.
     """
     text_box = draw.textbbox(
         (0, 0),
@@ -96,7 +120,7 @@ def draw_right_aligned_text(
     text: str,
     right_x: int,
     y: int,
-    font: ImageFont.FreeTypeFont,
+    font,
     fill: str,
 ) -> None:
     """
@@ -109,7 +133,10 @@ def draw_right_aligned_text(
     )
 
     draw.text(
-        (right_x - text_width, y),
+        (
+            right_x - text_width,
+            y,
+        ),
         text,
         font=font,
         fill=fill,
@@ -122,7 +149,7 @@ def draw_centered_text(
     left_x: int,
     right_x: int,
     y: int,
-    font: ImageFont.FreeTypeFont,
+    font,
     fill: str,
 ) -> None:
     """
@@ -135,12 +162,21 @@ def draw_centered_text(
     )
 
     available_width = right_x - left_x
-    text_x = left_x + (
-        available_width - text_width
-    ) // 2
+
+    text_x = (
+        left_x
+        + (
+            available_width
+            - text_width
+        )
+        // 2
+    )
 
     draw.text(
-        (text_x, y),
+        (
+            text_x,
+            y,
+        ),
         text,
         font=font,
         fill=fill,
@@ -181,13 +217,13 @@ def draw_status_box(
     bottom: int,
     heading: str,
     message: str,
-    heading_font: ImageFont.FreeTypeFont,
-    message_font: ImageFont.FreeTypeFont,
+    heading_font,
+    message_font,
     background: str,
     text_colour: str,
 ) -> None:
     """
-    Draw a rounded status box for success or warning messages.
+    Draw a rounded success or warning box.
     """
     draw.rounded_rectangle(
         (
