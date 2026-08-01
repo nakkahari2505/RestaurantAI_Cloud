@@ -1,79 +1,68 @@
 from pathlib import Path
 
+import PIL
 from PIL import Image, ImageDraw, ImageFont
 
 
-FONT_CANDIDATES = [
-    # Common Linux / Railway paths
-    Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
-    Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
-    Path("/usr/share/fonts/dejavu/DejaVuSans.ttf"),
-    Path("/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf"),
-
-    # Windows
-    Path("C:/Windows/Fonts/arial.ttf"),
-    Path("C:/Windows/Fonts/arialbd.ttf"),
-]
-
-
-def find_font_path(
+def _get_pillow_font_path(
     bold: bool = False,
-) -> Path | None:
+) -> Path:
     """
-    Find a usable TrueType font on Windows or Linux.
+    Return Pillow's bundled DejaVu Sans font.
 
-    Returns None when no supported system font exists.
+    This avoids any dependency on Windows or Railway
+    system-installed fonts.
     """
-    preferred_names = (
-        [
-            "DejaVuSans-Bold.ttf",
-            "arialbd.ttf",
-        ]
+    pillow_directory = Path(
+        PIL.__file__
+    ).resolve().parent
+
+    font_name = (
+        "DejaVuSans-Bold.ttf"
         if bold
-        else [
-            "DejaVuSans.ttf",
-            "arial.ttf",
-        ]
+        else "DejaVuSans.ttf"
     )
 
-    for preferred_name in preferred_names:
-        for font_path in FONT_CANDIDATES:
-            if (
-                font_path.name.lower()
-                == preferred_name.lower()
-                and font_path.exists()
-            ):
-                return font_path
+    possible_paths = [
+        pillow_directory
+        / "fonts"
+        / font_name,
 
-    return None
+        pillow_directory.parent
+        / "PIL"
+        / "fonts"
+        / font_name,
+    ]
+
+    for font_path in possible_paths:
+        if font_path.exists():
+            return font_path
+
+    raise FileNotFoundError(
+        "Pillow bundled DejaVu font was not found. "
+        f"Expected font: {font_name}"
+    )
 
 
 def load_font(
     size: int,
     bold: bool = False,
-):
+) -> ImageFont.FreeTypeFont:
     """
-    Load a TrueType font when available.
+    Load Pillow's bundled DejaVu font.
 
-    If the Railway container has no supported system font,
-    fall back to Pillow's built-in font instead of crashing.
+    Works consistently on:
+    - Windows local development
+    - Railway Linux deployment
     """
-    font_path = find_font_path(
+    font_path = _get_pillow_font_path(
         bold=bold,
     )
 
-    if font_path is not None:
-        return ImageFont.truetype(
-            str(font_path),
-            size=size,
-        )
-
-    print(
-        "Warning: No supported system font found. "
-        "Using Pillow default font."
+    return ImageFont.truetype(
+        str(font_path),
+        size=size,
     )
-
-    return ImageFont.load_default()
 
 
 def create_canvas(
@@ -84,9 +73,6 @@ def create_canvas(
     Image.Image,
     ImageDraw.ImageDraw,
 ]:
-    """
-    Create a blank image and drawing context.
-    """
     image = Image.new(
         "RGB",
         (width, height),
@@ -101,11 +87,8 @@ def create_canvas(
 def get_text_width(
     draw: ImageDraw.ImageDraw,
     text: str,
-    font,
+    font: ImageFont.FreeTypeFont,
 ) -> int:
-    """
-    Return rendered text width.
-    """
     text_box = draw.textbbox(
         (0, 0),
         text,
@@ -120,12 +103,9 @@ def draw_right_aligned_text(
     text: str,
     right_x: int,
     y: int,
-    font,
+    font: ImageFont.FreeTypeFont,
     fill: str,
 ) -> None:
-    """
-    Draw text ending at the supplied right-side position.
-    """
     text_width = get_text_width(
         draw=draw,
         text=text,
@@ -149,19 +129,18 @@ def draw_centered_text(
     left_x: int,
     right_x: int,
     y: int,
-    font,
+    font: ImageFont.FreeTypeFont,
     fill: str,
 ) -> None:
-    """
-    Draw text horizontally centred between two positions.
-    """
     text_width = get_text_width(
         draw=draw,
         text=text,
         font=font,
     )
 
-    available_width = right_x - left_x
+    available_width = (
+        right_x - left_x
+    )
 
     text_x = (
         left_x
@@ -193,9 +172,6 @@ def draw_table_row(
     border_colour: str,
     border_width: int = 1,
 ) -> None:
-    """
-    Draw one rectangular table row.
-    """
     draw.rectangle(
         (
             left,
@@ -217,14 +193,11 @@ def draw_status_box(
     bottom: int,
     heading: str,
     message: str,
-    heading_font,
-    message_font,
+    heading_font: ImageFont.FreeTypeFont,
+    message_font: ImageFont.FreeTypeFont,
     background: str,
     text_colour: str,
 ) -> None:
-    """
-    Draw a rounded success or warning box.
-    """
     draw.rounded_rectangle(
         (
             left,
@@ -261,9 +234,6 @@ def save_png(
     image: Image.Image,
     file_path: Path,
 ) -> None:
-    """
-    Save the final image as an optimized PNG.
-    """
     file_path.parent.mkdir(
         parents=True,
         exist_ok=True,
