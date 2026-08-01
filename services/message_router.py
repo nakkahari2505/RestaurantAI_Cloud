@@ -1,11 +1,11 @@
 import re
 
 from services.data_loader import load_auberry_workbook
-from services.formatter import (
-    format_store_performance_report,
-    format_yesterday_sales_report,
+from services.formatter import format_yesterday_sales_report
+from services.sales_for_a_period import get_store_performance_report
+from services.sales_for_a_period_image import (
+    generate_sales_for_a_period_image,
 )
-from services.sales_analytics import get_store_performance_report
 from services.yesterday_sales import get_yesterday_sales_report
 
 
@@ -18,7 +18,23 @@ SALES_PERIOD_PATTERN = re.compile(
 )
 
 
-def route_message(message: str) -> str:
+def route_message(message: str) -> dict:
+    """
+    Route a WhatsApp message and return either:
+
+    {
+        "response_type": "text",
+        "body": "..."
+    }
+
+    or:
+
+    {
+        "response_type": "media",
+        "body": "...",
+        "relative_media_url": "/static/reports/....png"
+    }
+    """
     normalized_message = " ".join(
         message.strip().split()
     )
@@ -33,7 +49,10 @@ def route_message(message: str) -> str:
         data = load_auberry_workbook()
         report = get_yesterday_sales_report(data)
 
-        return format_yesterday_sales_report(report)
+        return {
+            "response_type": "text",
+            "body": format_yesterday_sales_report(report),
+        }
 
     sales_period_match = SALES_PERIOD_PATTERN.match(
         normalized_message
@@ -51,14 +70,34 @@ def route_message(message: str) -> str:
                 start_date_text=start_date_text,
                 end_date_text=end_date_text,
             )
+
+            image_result = generate_sales_for_a_period_image(
+                report
+            )
+
         except ValueError as error:
-            return str(error)
+            return {
+                "response_type": "text",
+                "body": str(error),
+            }
 
-        return format_store_performance_report(report)
+        return {
+            "response_type": "media",
+            "body": (
+                "📊 Sales Performance\n"
+                f"{start_date_text} to {end_date_text}"
+            ),
+            "relative_media_url": image_result[
+                "relative_url"
+            ],
+        }
 
-    return (
-        "Sorry, I could not understand that request.\n\n"
-        "Currently available commands:\n"
-        "• Yesterday Sales\n"
-        "• Sales from 01 Jul 2026 to 14 Jul 2026"
-    )
+    return {
+        "response_type": "text",
+        "body": (
+            "Sorry, I could not understand that request.\n\n"
+            "Currently available commands:\n"
+            "• Yesterday Sales\n"
+            "• Sales from 01 Jul 2026 to 14 Jul 2026"
+        ),
+    }
