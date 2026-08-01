@@ -182,20 +182,63 @@ def format_yesterday_sales_report(report: dict) -> str:
     return "\n".join(lines)
 
 
-def _build_store_performance_table(
+def _build_sales_transactions_table(
     report: dict,
 ) -> list[str]:
     store_width = 14
     sales_width = 11
     txns_width = 7
+    table_width = store_width + sales_width + txns_width
+
+    lines = [
+        "```",
+        (
+            f"{'Store':<{store_width}}"
+            f"{'Sales':>{sales_width}}"
+            f"{'Txns':>{txns_width}}"
+        ),
+        "-" * table_width,
+    ]
+
+    for row in report["rows"]:
+        store_name = _shorten_store_name(
+            row["store"],
+            store_width,
+        )
+
+        lines.append(
+            f"{store_name:<{store_width}}"
+            f"{_format_indian_number(row['total_sales']):>{sales_width}}"
+            f"{_format_indian_number(row['total_txns']):>{txns_width}}"
+        )
+
+    total = report["total"]
+
+    lines.extend(
+        [
+            "-" * table_width,
+            (
+                f"{'TOTAL':<{store_width}}"
+                f"{_format_indian_number(total['total_sales']):>{sales_width}}"
+                f"{_format_indian_number(total['total_txns']):>{txns_width}}"
+            ),
+            "```",
+        ]
+    )
+
+    return lines
+
+
+def _build_average_kpis_table(
+    report: dict,
+) -> list[str]:
+    store_width = 14
     ads_width = 9
-    adt_width = 6
+    adt_width = 7
     apt_width = 7
 
     table_width = (
         store_width
-        + sales_width
-        + txns_width
         + ads_width
         + adt_width
         + apt_width
@@ -205,8 +248,6 @@ def _build_store_performance_table(
         "```",
         (
             f"{'Store':<{store_width}}"
-            f"{'Sales':>{sales_width}}"
-            f"{'Txns':>{txns_width}}"
             f"{'ADS':>{ads_width}}"
             f"{'ADT':>{adt_width}}"
             f"{'APT':>{apt_width}}"
@@ -222,8 +263,6 @@ def _build_store_performance_table(
 
         lines.append(
             f"{store_name:<{store_width}}"
-            f"{_format_indian_number(row['total_sales']):>{sales_width}}"
-            f"{_format_indian_number(row['total_txns']):>{txns_width}}"
             f"{_format_indian_number(row['ads']):>{ads_width}}"
             f"{_format_decimal(row['adt']):>{adt_width}}"
             f"{_format_indian_number(row['apt']):>{apt_width}}"
@@ -236,8 +275,6 @@ def _build_store_performance_table(
             "-" * table_width,
             (
                 f"{'TOTAL':<{store_width}}"
-                f"{_format_indian_number(total['total_sales']):>{sales_width}}"
-                f"{_format_indian_number(total['total_txns']):>{txns_width}}"
                 f"{_format_indian_number(total['ads']):>{ads_width}}"
                 f"{_format_decimal(total['adt']):>{adt_width}}"
                 f"{_format_indian_number(total['apt']):>{apt_width}}"
@@ -283,15 +320,25 @@ def format_store_performance_report(
     lines = [
         "📊 *Sales Performance*",
         "",
-        (
-            f"🗓️ *Time Period:* "
-            f"{start_date} to {end_date}"
-        ),
+        "🗓️ *Time Period:*",
+        f"{start_date} to {end_date}",
         "",
     ]
 
     lines.extend(
-        _build_store_performance_table(report)
+        _build_sales_transactions_table(report)
+    )
+
+    lines.extend(
+        [
+            "",
+            "📈 *Average Performance*",
+            "",
+        ]
+    )
+
+    lines.extend(
+        _build_average_kpis_table(report)
     )
 
     lines.extend(
