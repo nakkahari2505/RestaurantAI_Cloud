@@ -1,47 +1,13 @@
 from pathlib import Path
 
-import PIL
 from PIL import Image, ImageDraw, ImageFont
 
 
-def _get_pillow_font_path(
-    bold: bool = False,
-) -> Path:
-    """
-    Return Pillow's bundled DejaVu Sans font.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+FONTS_DIRECTORY = PROJECT_ROOT / "assets" / "fonts"
 
-    This avoids any dependency on Windows or Railway
-    system-installed fonts.
-    """
-    pillow_directory = Path(
-        PIL.__file__
-    ).resolve().parent
-
-    font_name = (
-        "DejaVuSans-Bold.ttf"
-        if bold
-        else "DejaVuSans.ttf"
-    )
-
-    possible_paths = [
-        pillow_directory
-        / "fonts"
-        / font_name,
-
-        pillow_directory.parent
-        / "PIL"
-        / "fonts"
-        / font_name,
-    ]
-
-    for font_path in possible_paths:
-        if font_path.exists():
-            return font_path
-
-    raise FileNotFoundError(
-        "Pillow bundled DejaVu font was not found. "
-        f"Expected font: {font_name}"
-    )
+REGULAR_FONT_PATH = FONTS_DIRECTORY / "DejaVuSans.ttf"
+BOLD_FONT_PATH = FONTS_DIRECTORY / "DejaVuSans-Bold.ttf"
 
 
 def load_font(
@@ -49,15 +15,20 @@ def load_font(
     bold: bool = False,
 ) -> ImageFont.FreeTypeFont:
     """
-    Load Pillow's bundled DejaVu font.
+    Load the font bundled inside the RestaurantAI project.
 
-    Works consistently on:
-    - Windows local development
-    - Railway Linux deployment
+    This gives identical rendering locally and on Railway.
     """
-    font_path = _get_pillow_font_path(
-        bold=bold,
+    font_path = (
+        BOLD_FONT_PATH
+        if bold
+        else REGULAR_FONT_PATH
     )
+
+    if not font_path.exists():
+        raise FileNotFoundError(
+            f"Required font file was not found: {font_path}"
+        )
 
     return ImageFont.truetype(
         str(font_path),
@@ -138,9 +109,7 @@ def draw_centered_text(
         font=font,
     )
 
-    available_width = (
-        right_x - left_x
-    )
+    available_width = right_x - left_x
 
     text_x = (
         left_x
