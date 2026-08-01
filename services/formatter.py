@@ -1,9 +1,39 @@
 from datetime import datetime
 
 
+def _parse_report_date(report_date: str) -> datetime:
+    return datetime.strptime(report_date, "%Y-%m-%d")
+
+
 def _format_report_date(report_date: str) -> str:
-    date_value = datetime.strptime(report_date, "%Y-%m-%d")
+    date_value = _parse_report_date(report_date)
     return date_value.strftime("%d %b %Y")
+
+
+def _format_date_with_ordinal(date_value: datetime) -> str:
+    day = date_value.day
+
+    if 10 < day % 100 < 14:
+        suffix = "th"
+    else:
+        suffix = {
+            1: "st",
+            2: "nd",
+            3: "rd",
+        }.get(day % 10, "th")
+
+    return f"{day}{suffix} {date_value.strftime('%b')}"
+
+
+def _format_month_date_range(report_date: str) -> str:
+    end_date = _parse_report_date(report_date)
+    start_date = end_date.replace(day=1)
+
+    return (
+        f"{_format_date_with_ordinal(start_date)}"
+        f" to "
+        f"{_format_date_with_ordinal(end_date)}"
+    )
 
 
 def _format_indian_number(value: float) -> str:
@@ -16,7 +46,6 @@ def _format_indian_number(value: float) -> str:
 
     last_three = digits[-3:]
     remaining = digits[:-3]
-
     groups = []
 
     while len(remaining) > 2:
@@ -29,80 +58,87 @@ def _format_indian_number(value: float) -> str:
     return sign + ",".join(groups + [last_three])
 
 
-def format_yesterday_sales_report(report: dict) -> str:
-    report_date = _format_report_date(report["report_date"])
-
-    # Kept narrow enough for mobile WhatsApp.
+def _build_two_column_table(
+    rows: list[dict],
+    value_key: str,
+    total_value: float,
+) -> list[str]:
     store_width = 18
-    yesterday_width = 9
-    gap_width = 2
-    mtd_width = 11
-
-    table_width = (
-        store_width
-        + yesterday_width
-        + gap_width
-        + mtd_width
-    )
+    value_width = 11
+    table_width = store_width + value_width
 
     lines = [
-        "📊 *Yesterday Sales*",
-        f"📅 {report_date}",
-        "",
         "```",
         (
             f"{'Store':<{store_width}}"
-            f"{'Yesterday':>{yesterday_width}}"
-            f"{'':<{gap_width}}"
-            f"{'MTD':>{mtd_width}}"
+            f"{'Sales':>{value_width}}"
         ),
         "-" * table_width,
     ]
 
-    for row in report["rows"]:
+    for row in rows:
         store_name = str(row["store"]).strip()
 
         if len(store_name) > store_width:
             store_name = store_name[: store_width - 1] + "…"
 
-        yesterday_sales = _format_indian_number(
-            row["yesterday_sales"]
-        )
-
-        month_to_date_sales = _format_indian_number(
-            row["month_to_date_sales"]
-        )
+        sales_value = _format_indian_number(row[value_key])
 
         lines.append(
             f"{store_name:<{store_width}}"
-            f"{yesterday_sales:>{yesterday_width}}"
-            f"{'':<{gap_width}}"
-            f"{month_to_date_sales:>{mtd_width}}"
+            f"{sales_value:>{value_width}}"
         )
-
-    total = report["total"]
-
-    total_yesterday = _format_indian_number(
-        total["yesterday_sales"]
-    )
-
-    total_mtd = _format_indian_number(
-        total["month_to_date_sales"]
-    )
 
     lines.extend(
         [
             "-" * table_width,
             (
                 f"{'TOTAL':<{store_width}}"
-                f"{total_yesterday:>{yesterday_width}}"
-                f"{'':<{gap_width}}"
-                f"{total_mtd:>{mtd_width}}"
+                f"{_format_indian_number(total_value):>{value_width}}"
             ),
             "```",
+        ]
+    )
+
+    return lines
+
+
+def format_yesterday_sales_report(report: dict) -> str:
+    report_date = _format_report_date(report["report_date"])
+    month_date_range = _format_month_date_range(report["report_date"])
+
+    lines = [
+        "📊 *Yesterday Sales*",
+        f"📅 {report_date}",
+        "",
+    ]
+
+    lines.extend(
+        _build_two_column_table(
+            rows=report["rows"],
+            value_key="yesterday_sales",
+            total_value=report["total"]["yesterday_sales"],
+        )
+    )
+
+    lines.extend(
+        [
+            "",
+            "📈 *Month Till Date*",
+            f"🗓️ {month_date_range}",
             "",
         ]
     )
+
+    lines.extend(
+        _build_two_column_table(
+            rows=report["rows"],
+            value_key="month_to_date_sales",
+            total_value=report["total"]["month_to_date_sales"],
+        )
+    )
+
+    lines.append("")
 
     if report.get("warning"):
         lines.extend(
