@@ -12,6 +12,12 @@ from services.sales_for_a_period import get_store_performance_report
 from services.sales_for_a_period_image import (
     generate_sales_for_a_period_image,
 )
+from services.kpi_period_comparison import (
+    get_kpi_period_comparison_report,
+)
+from services.kpi_period_comparison_image import (
+    generate_kpi_period_comparison_image,
+)
 from services.yesterday_sales import get_yesterday_sales_report
 
 
@@ -145,4 +151,38 @@ async def whatsapp(
     return PlainTextResponse(
         content=str(response),
         media_type="application/xml",
+    )
+
+@app.get("/compare-test")
+def compare_test():
+    data = load_auberry_workbook()
+
+    report = get_kpi_period_comparison_report(
+        data=data,
+        from_start_date_text="01-Apr-2025",
+        from_end_date_text="30-Jun-2025",
+        to_start_date_text="01-Apr-2026",
+        to_end_date_text="30-Jun-2026",
+    )
+
+    return report
+@app.get("/compare-image-test")
+def compare_image_test():
+    data = load_auberry_workbook()
+
+    report = get_kpi_period_comparison_report(
+        data=data,
+        from_start_date_text="01-Apr-2025",
+        from_end_date_text="30-Jun-2025",
+        to_start_date_text="01-Apr-2026",
+        to_end_date_text="30-Jun-2026",
+    )
+
+    image_result = generate_kpi_period_comparison_image(
+        report
+    )
+
+    return FileResponse(
+        path=image_result["file_path"],
+        media_type="image/png",
     )

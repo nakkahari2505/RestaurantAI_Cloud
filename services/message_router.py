@@ -2,11 +2,21 @@ import re
 
 from services.data_loader import load_auberry_workbook
 from services.formatter import format_yesterday_sales_report
-from services.sales_for_a_period import get_store_performance_report
+from services.kpi_period_comparison import (
+    get_kpi_period_comparison_report,
+)
+from services.kpi_period_comparison_image import (
+    generate_kpi_period_comparison_image,
+)
+from services.sales_for_a_period import (
+    get_store_performance_report,
+)
 from services.sales_for_a_period_image import (
     generate_sales_for_a_period_image,
 )
-from services.yesterday_sales import get_yesterday_sales_report
+from services.yesterday_sales import (
+    get_yesterday_sales_report,
+)
 
 
 SALES_PERIOD_PATTERN = re.compile(
@@ -14,6 +24,16 @@ SALES_PERIOD_PATTERN = re.compile(
     r"(\d{1,2}\s+[a-zA-Z]{3}\s+\d{4})"
     r"\s+to\s+"
     r"(\d{1,2}\s+[a-zA-Z]{3}\s+\d{4})$",
+    re.IGNORECASE,
+)
+
+
+COMPARISON_PATTERN = re.compile(
+    r"^compare\s+"
+    r"(\d{1,2}-[a-zA-Z]{3}-\d{4})\s+"
+    r"(\d{1,2}-[a-zA-Z]{3}-\d{4})\s+"
+    r"(\d{1,2}-[a-zA-Z]{3}-\d{4})\s+"
+    r"(\d{1,2}-[a-zA-Z]{3}-\d{4})$",
     re.IGNORECASE,
 )
 
@@ -36,7 +56,11 @@ def route_message(message: str) -> dict:
     }
     """
     normalized_message = " ".join(
-        message.strip().split()
+        str(message).strip().split()
+    )
+
+    normalized_lower = (
+        normalized_message.lower()
     )
 
     yesterday_commands = {
@@ -45,22 +69,40 @@ def route_message(message: str) -> dict:
         "yesterday sale",
     }
 
-    if normalized_message.lower() in yesterday_commands:
+    # =====================================================
+    # CAPABILITY 1: YESTERDAY SALES
+    # =====================================================
+
+    if normalized_lower in yesterday_commands:
         data = load_auberry_workbook()
-        report = get_yesterday_sales_report(data)
+
+        report = get_yesterday_sales_report(
+            data
+        )
 
         return {
             "response_type": "text",
-            "body": format_yesterday_sales_report(report),
+            "body": format_yesterday_sales_report(
+                report
+            ),
         }
+
+    # =====================================================
+    # CAPABILITY 2: SALES FOR A PERIOD
+    # =====================================================
 
     sales_period_match = SALES_PERIOD_PATTERN.match(
         normalized_message
     )
 
     if sales_period_match:
-        start_date_text = sales_period_match.group(1)
-        end_date_text = sales_period_match.group(2)
+        start_date_text = (
+            sales_period_match.group(1)
+        )
+
+        end_date_text = (
+            sales_period_match.group(2)
+        )
 
         data = load_auberry_workbook()
 
@@ -71,8 +113,10 @@ def route_message(message: str) -> dict:
                 end_date_text=end_date_text,
             )
 
-            image_result = generate_sales_for_a_period_image(
-                report
+            image_result = (
+                generate_sales_for_a_period_image(
+                    report
+                )
             )
 
         except ValueError as error:
@@ -81,23 +125,161 @@ def route_message(message: str) -> dict:
                 "body": str(error),
             }
 
+        except Exception as error:
+            print(
+                "Sales-for-period report error:",
+                repr(error),
+            )
+
+            return {
+                "response_type": "text",
+                "body": (
+                    "The sales report could not be generated. "
+                    "Please try again."
+                ),
+            }
+
         return {
             "response_type": "media",
             "body": (
                 "📊 Sales Performance\n"
-                f"{start_date_text} to {end_date_text}"
+                f"{start_date_text} to "
+                f"{end_date_text}"
             ),
-            "relative_media_url": image_result[
-                "relative_url"
-            ],
+            "relative_media_url": (
+                image_result["relative_url"]
+            ),
         }
+
+    # =====================================================
+    # CAPABILITY 3: KPI PERIOD COMPARISON
+    # =====================================================
+
+    comparison_match = COMPARISON_PATTERN.match(
+        normalized_message
+    )
+
+    if comparison_match:
+        from_start_date_text = (
+            comparison_match.group(1)
+        )
+
+        from_end_date_text = (
+            comparison_match.group(2)
+        )
+
+        to_start_date_text = (
+            comparison_match.group(3)
+        )
+
+        to_end_date_text = (
+            comparison_match.group(4)
+        )
+
+        data = load_auberry_workbook()
+
+        try:
+            report = (
+                get_kpi_period_comparison_report(
+                    data=data,
+                    from_start_date_text=(
+                        from_start_date_text
+                    ),
+                    from_end_date_text=(
+                        from_end_date_text
+                    ),
+                    to_start_date_text=(
+                        to_start_date_text
+                    ),
+                    to_end_date_text=(
+                        to_end_date_text
+                    ),
+                )
+            )
+
+            image_result = (
+                generate_kpi_period_comparison_image(
+                    report
+                )
+            )
+
+        except ValueError as error:
+            return {
+                "response_type": "text",
+                "body": str(error),
+            }
+
+        except Exception as error:
+            print(
+                "KPI comparison report error:",
+                repr(error),
+            )
+
+            return {
+                "response_type": "text",
+                "body": (
+                    "The comparison report could not "
+                    "be generated. Please try again."
+                ),
+            }
+
+        return {
+            "response_type": "media",
+            "body": (
+                "📊 Store Performance Comparison\n"
+                f"{from_start_date_text} to "
+                f"{from_end_date_text}\n"
+                "vs\n"
+                f"{to_start_date_text} to "
+                f"{to_end_date_text}"
+            ),
+            "relative_media_url": (
+                image_result["relative_url"]
+            ),
+        }
+
+    # =====================================================
+    # SPECIFIC INVALID-COMMAND GUIDANCE
+    # =====================================================
+
+    if normalized_lower.startswith("compare"):
+        return {
+            "response_type": "text",
+            "body": (
+                "Please use the comparison command "
+                "in this format:\n\n"
+                "Compare DD-Mmm-YYYY DD-Mmm-YYYY "
+                "DD-Mmm-YYYY DD-Mmm-YYYY\n\n"
+                "Example:\n"
+                "Compare 01-Apr-2025 30-Jun-2025 "
+                "01-Apr-2026 30-Jun-2026"
+            ),
+        }
+
+    if normalized_lower.startswith("sales"):
+        return {
+            "response_type": "text",
+            "body": (
+                "Please use the sales command "
+                "in this format:\n\n"
+                "Sales from DD Mon YYYY to DD Mon YYYY\n\n"
+                "Example:\n"
+                "Sales from 01 Jul 2026 to 14 Jul 2026"
+            ),
+        }
+
+    # =====================================================
+    # UNKNOWN COMMAND
+    # =====================================================
 
     return {
         "response_type": "text",
         "body": (
             "Sorry, I could not understand that request.\n\n"
-            "Currently available commands:\n"
-            "• Yesterday Sales\n"
-            "• Sales from 01 Jul 2026 to 14 Jul 2026"
+            "Currently available commands:\n\n"
+            "• Yesterday Sales\n\n"
+            "• Sales from 01 Jul 2026 to 14 Jul 2026\n\n"
+            "• Compare 01-Apr-2025 30-Jun-2025 "
+            "01-Apr-2026 30-Jun-2026"
         ),
     }
