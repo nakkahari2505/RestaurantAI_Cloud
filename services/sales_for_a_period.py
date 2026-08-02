@@ -3,19 +3,52 @@ from datetime import datetime
 import pandas as pd
 
 
-def _parse_date(date_text: str) -> pd.Timestamp:
+ACCEPTED_DATE_FORMATS = (
+    "%d-%b-%Y",
+    "%d %b %Y",
+)
+
+
+def _parse_date(
+    date_text: str,
+) -> pd.Timestamp:
     """
-    Convert a date such as '01 Jul 2026' into a normalized pandas date.
+    Convert a supported date into a normalized pandas date.
+
+    Official RestaurantAI format:
+        DD-Mmm-YYYY
+
+    Also accepted for backward compatibility:
+        DD Mmm YYYY
+
+    Examples:
+        01-Jul-2026
+        01 Jul 2026
+        1-Jul-2026
     """
-    try:
-        return pd.Timestamp(
-            datetime.strptime(date_text.strip(), "%d %b %Y")
-        ).normalize()
-    except ValueError as exc:
-        raise ValueError(
-            f"Invalid date: {date_text}. "
-            "Expected format: DD Mon YYYY, for example 01 Jul 2026."
-        ) from exc
+    cleaned_date = " ".join(
+        str(date_text).strip().split()
+    )
+
+    for date_format in ACCEPTED_DATE_FORMATS:
+        try:
+            parsed_date = datetime.strptime(
+                cleaned_date,
+                date_format,
+            )
+
+            return pd.Timestamp(
+                parsed_date
+            ).normalize()
+
+        except ValueError:
+            continue
+
+    raise ValueError(
+        f"Invalid date: {date_text}. "
+        "Please use DD-Mmm-YYYY format, "
+        "for example 01-Jul-2026."
+    )
 
 
 def _prepare_sales_data(
@@ -27,8 +60,17 @@ def _prepare_sales_data(
     sales = data["sales"].copy()
     store_info = data["store_info"].copy()
 
-    sales.columns = sales.columns.astype(str).str.strip()
-    store_info.columns = store_info.columns.astype(str).str.strip()
+    sales.columns = (
+        sales.columns
+        .astype(str)
+        .str.strip()
+    )
+
+    store_info.columns = (
+        store_info.columns
+        .astype(str)
+        .str.strip()
+    )
 
     required_sales_columns = {
         "Date",
@@ -38,13 +80,16 @@ def _prepare_sales_data(
     }
 
     missing_sales_columns = (
-        required_sales_columns - set(sales.columns)
+        required_sales_columns
+        - set(sales.columns)
     )
 
     if missing_sales_columns:
         raise ValueError(
             "Missing columns in sales sheet: "
-            + ", ".join(sorted(missing_sales_columns))
+            + ", ".join(
+                sorted(missing_sales_columns)
+            )
         )
 
     required_store_columns = {
@@ -53,13 +98,16 @@ def _prepare_sales_data(
     }
 
     missing_store_columns = (
-        required_store_columns - set(store_info.columns)
+        required_store_columns
+        - set(store_info.columns)
     )
 
     if missing_store_columns:
         raise ValueError(
             "Missing columns in store_info sheet: "
-            + ", ".join(sorted(missing_store_columns))
+            + ", ".join(
+                sorted(missing_store_columns)
+            )
         )
 
     sales["Restaurant"] = (
@@ -84,13 +132,20 @@ def _prepare_sales_data(
     )
 
     store_mapping = (
-        store_info[["Restaurant", "Store"]]
+        store_info[
+            [
+                "Restaurant",
+                "Store",
+            ]
+        ]
         .loc[
             lambda frame:
             frame["Restaurant"].ne("")
             & frame["Store"].ne("")
         ]
-        .drop_duplicates(subset=["Restaurant"])
+        .drop_duplicates(
+            subset=["Restaurant"]
+        )
     )
 
     all_stores = (
@@ -133,12 +188,16 @@ def _prepare_sales_data(
         .str.strip()
     )
 
-    sales = sales.dropna(subset=["Date"])
+    sales = sales.dropna(
+        subset=["Date"]
+    )
 
     sales["Transaction_ID"] = (
         sales["Store"]
         + "|"
-        + sales["Date"].dt.strftime("%Y-%m-%d")
+        + sales["Date"].dt.strftime(
+            "%Y-%m-%d"
+        )
         + "|"
         + sales["Invoice No"]
     )
@@ -172,7 +231,9 @@ def _get_missing_dates(
         available_dates
     )
 
-    return list(missing_dates)
+    return list(
+        missing_dates
+    )
 
 
 def get_store_performance_report(
@@ -187,15 +248,22 @@ def get_store_performance_report(
     ADS and ADT use the full requested calendar period,
     including dates with no available sales rows.
     """
-    start_date = _parse_date(start_date_text)
-    end_date = _parse_date(end_date_text)
+    start_date = _parse_date(
+        start_date_text
+    )
+
+    end_date = _parse_date(
+        end_date_text
+    )
 
     if start_date > end_date:
         raise ValueError(
             "From date cannot be later than To date."
         )
 
-    sales, all_stores = _prepare_sales_data(data)
+    sales, all_stores = _prepare_sales_data(
+        data
+    )
 
     number_of_days = (
         end_date - start_date
@@ -221,7 +289,10 @@ def get_store_performance_report(
             dropna=False,
         )
         .agg(
-            total_sales=("Sub Total", "sum"),
+            total_sales=(
+                "Sub Total",
+                "sum",
+            ),
             total_txns=(
                 "Transaction_ID",
                 "nunique",
@@ -277,31 +348,43 @@ def get_store_performance_report(
     grouped = grouped.sort_values(
         by="total_sales",
         ascending=False,
-    ).reset_index(drop=True)
+    ).reset_index(
+        drop=True
+    )
 
     rows = []
 
     for _, row in grouped.iterrows():
         rows.append(
             {
-                "store": str(row["Store"]),
+                "store": str(
+                    row["Store"]
+                ),
                 "total_sales": round(
-                    float(row["total_sales"]),
+                    float(
+                        row["total_sales"]
+                    ),
                     2,
                 ),
                 "total_txns": int(
                     row["total_txns"]
                 ),
                 "ads": round(
-                    float(row["ads"]),
+                    float(
+                        row["ads"]
+                    ),
                     2,
                 ),
                 "adt": round(
-                    float(row["adt"]),
+                    float(
+                        row["adt"]
+                    ),
                     2,
                 ),
                 "apt": round(
-                    float(row["apt"]),
+                    float(
+                        row["apt"]
+                    ),
                     2,
                 ),
             }
@@ -323,16 +406,19 @@ def get_store_performance_report(
         ),
         "total_txns": total_txns,
         "ads": round(
-            total_sales / number_of_days,
+            total_sales
+            / number_of_days,
             2,
         ),
         "adt": round(
-            total_txns / number_of_days,
+            total_txns
+            / number_of_days,
             2,
         ),
         "apt": round(
             (
-                total_sales / total_txns
+                total_sales
+                / total_txns
                 if total_txns > 0
                 else 0.0
             ),
@@ -351,7 +437,9 @@ def get_store_performance_report(
         "rows": rows,
         "total": total,
         "missing_dates": [
-            date_value.strftime("%Y-%m-%d")
+            date_value.strftime(
+                "%Y-%m-%d"
+            )
             for date_value in missing_dates
         ],
         "data_complete": (

@@ -19,26 +19,68 @@ from services.yesterday_sales import (
 )
 
 
+DATE_TOKEN_PATTERN = (
+    r"\d{1,2}(?:-[a-zA-Z]{3}-|\s+[a-zA-Z]{3}\s+)\d{4}"
+)
+
+
 SALES_PERIOD_PATTERN = re.compile(
-    r"^sales\s+from\s+"
-    r"(\d{1,2}\s+[a-zA-Z]{3}\s+\d{4})"
-    r"\s+to\s+"
-    r"(\d{1,2}\s+[a-zA-Z]{3}\s+\d{4})$",
+    rf"^sales\s+from\s+"
+    rf"({DATE_TOKEN_PATTERN})"
+    rf"\s+to\s+"
+    rf"({DATE_TOKEN_PATTERN})$",
     re.IGNORECASE,
 )
 
 
 COMPARISON_PATTERN = re.compile(
-    r"^compare\s+"
-    r"(\d{1,2}-[a-zA-Z]{3}-\d{4})\s+"
-    r"(\d{1,2}-[a-zA-Z]{3}-\d{4})\s+"
-    r"(\d{1,2}-[a-zA-Z]{3}-\d{4})\s+"
-    r"(\d{1,2}-[a-zA-Z]{3}-\d{4})$",
+    rf"^compare\s+"
+    rf"({DATE_TOKEN_PATTERN})\s+"
+    rf"({DATE_TOKEN_PATTERN})\s+"
+    rf"({DATE_TOKEN_PATTERN})\s+"
+    rf"({DATE_TOKEN_PATTERN})$",
     re.IGNORECASE,
 )
 
 
-def route_message(message: str) -> dict:
+def _display_date(
+    date_text: str,
+) -> str:
+    """
+    Convert any accepted input date into the official
+    RestaurantAI display format: DD-Mmm-YYYY.
+    """
+    cleaned_date = " ".join(
+        str(date_text).strip().split()
+    )
+
+    cleaned_date = cleaned_date.replace(
+        " ",
+        "-",
+    )
+
+    parts = cleaned_date.split("-")
+
+    if len(parts) != 3:
+        return cleaned_date
+
+    day_text, month_text, year_text = parts
+
+    try:
+        day_number = int(day_text)
+    except ValueError:
+        return cleaned_date
+
+    return (
+        f"{day_number:02d}-"
+        f"{month_text.title()}-"
+        f"{year_text}"
+    )
+
+
+def route_message(
+    message: str,
+) -> dict:
     """
     Route a WhatsApp message and return either:
 
@@ -139,12 +181,20 @@ def route_message(message: str) -> dict:
                 ),
             }
 
+        start_date_display = _display_date(
+            start_date_text
+        )
+
+        end_date_display = _display_date(
+            end_date_text
+        )
+
         return {
             "response_type": "media",
             "body": (
                 "📊 Sales Performance\n"
-                f"{start_date_text} to "
-                f"{end_date_text}"
+                f"{start_date_display} to "
+                f"{end_date_display}"
             ),
             "relative_media_url": (
                 image_result["relative_url"]
@@ -223,15 +273,31 @@ def route_message(message: str) -> dict:
                 ),
             }
 
+        from_start_display = _display_date(
+            from_start_date_text
+        )
+
+        from_end_display = _display_date(
+            from_end_date_text
+        )
+
+        to_start_display = _display_date(
+            to_start_date_text
+        )
+
+        to_end_display = _display_date(
+            to_end_date_text
+        )
+
         return {
             "response_type": "media",
             "body": (
                 "📊 Store Performance Comparison\n"
-                f"{from_start_date_text} to "
-                f"{from_end_date_text}\n"
+                f"{from_start_display} to "
+                f"{from_end_display}\n"
                 "vs\n"
-                f"{to_start_date_text} to "
-                f"{to_end_date_text}"
+                f"{to_start_display} to "
+                f"{to_end_display}"
             ),
             "relative_media_url": (
                 image_result["relative_url"]
@@ -242,7 +308,9 @@ def route_message(message: str) -> dict:
     # SPECIFIC INVALID-COMMAND GUIDANCE
     # =====================================================
 
-    if normalized_lower.startswith("compare"):
+    if normalized_lower.startswith(
+        "compare"
+    ):
         return {
             "response_type": "text",
             "body": (
@@ -256,15 +324,19 @@ def route_message(message: str) -> dict:
             ),
         }
 
-    if normalized_lower.startswith("sales"):
+    if normalized_lower.startswith(
+        "sales"
+    ):
         return {
             "response_type": "text",
             "body": (
                 "Please use the sales command "
                 "in this format:\n\n"
-                "Sales from DD Mon YYYY to DD Mon YYYY\n\n"
+                "Sales from DD-Mmm-YYYY "
+                "to DD-Mmm-YYYY\n\n"
                 "Example:\n"
-                "Sales from 01 Jul 2026 to 14 Jul 2026"
+                "Sales from 01-Jul-2026 "
+                "to 14-Jul-2026"
             ),
         }
 
@@ -278,7 +350,8 @@ def route_message(message: str) -> dict:
             "Sorry, I could not understand that request.\n\n"
             "Currently available commands:\n\n"
             "• Yesterday Sales\n\n"
-            "• Sales from 01 Jul 2026 to 14 Jul 2026\n\n"
+            "• Sales from 01-Jul-2026 "
+            "to 14-Jul-2026\n\n"
             "• Compare 01-Apr-2025 30-Jun-2025 "
             "01-Apr-2026 30-Jun-2026"
         ),
