@@ -68,6 +68,7 @@ def _display_date(
 
     try:
         day_number = int(day_text)
+
     except ValueError:
         return cleaned_date
 
@@ -76,6 +77,76 @@ def _display_date(
         f"{month_text.title()}-"
         f"{year_text}"
     )
+
+
+def _run_yesterday_sales() -> dict:
+    """
+    Run the existing deterministic Yesterday Sales engine.
+
+    Both the old fixed command and the new GPT intent path
+    call this same function.
+    """
+    data = load_auberry_workbook()
+
+    report = get_yesterday_sales_report(
+        data
+    )
+
+    return {
+        "response_type": "text",
+        "body": format_yesterday_sales_report(
+            report
+        ),
+    }
+
+
+def _try_llm_intent(
+    user_message: str,
+) -> dict | None:
+    """
+    Try to understand an unmatched natural-language message.
+
+    Returns:
+        A routed response when GPT identifies a supported intent.
+
+        None when:
+        - the request is unsupported,
+        - OpenAI is unavailable,
+        - intent parsing fails.
+
+    The import is kept inside this function so an LLM
+    configuration problem cannot prevent RestaurantAI
+    from starting.
+    """
+    try:
+        from services.intent_parser import (
+            parse_intent,
+        )
+
+        intent_result = parse_intent(
+            user_message=user_message
+        )
+
+        print(
+            "LLM intent result:",
+            intent_result,
+        )
+
+        if (
+            intent_result["capability"]
+            == "yesterday_sales"
+        ):
+            return _run_yesterday_sales()
+
+        return None
+
+    except Exception as error:
+        print(
+            "LLM intent routing error:",
+            repr(error),
+        )
+
+        return None
 
 
 def route_message(
@@ -96,6 +167,12 @@ def route_message(
         "body": "...",
         "relative_media_url": "/static/reports/....png"
     }
+
+    Routing order:
+
+    1. Existing deterministic commands
+    2. GPT natural-language intent fallback
+    3. Existing command guidance
     """
     normalized_message = " ".join(
         str(message).strip().split()
@@ -113,24 +190,15 @@ def route_message(
 
     # =====================================================
     # CAPABILITY 1: YESTERDAY SALES
+    # EXISTING DETERMINISTIC COMMAND
     # =====================================================
 
     if normalized_lower in yesterday_commands:
-        data = load_auberry_workbook()
-
-        report = get_yesterday_sales_report(
-            data
-        )
-
-        return {
-            "response_type": "text",
-            "body": format_yesterday_sales_report(
-                report
-            ),
-        }
+        return _run_yesterday_sales()
 
     # =====================================================
     # CAPABILITY 2: SALES FOR A PERIOD
+    # EXISTING DETERMINISTIC COMMAND
     # =====================================================
 
     sales_period_match = SALES_PERIOD_PATTERN.match(
@@ -203,6 +271,7 @@ def route_message(
 
     # =====================================================
     # CAPABILITY 3: KPI PERIOD COMPARISON
+    # EXISTING DETERMINISTIC COMMAND
     # =====================================================
 
     comparison_match = COMPARISON_PATTERN.match(
@@ -305,6 +374,17 @@ def route_message(
         }
 
     # =====================================================
+    # GPT NATURAL-LANGUAGE FALLBACK
+    # =====================================================
+
+    llm_routed_response = _try_llm_intent(
+        user_message=normalized_message
+    )
+
+    if llm_routed_response is not None:
+        return llm_routed_response
+
+    # =====================================================
     # SPECIFIC INVALID-COMMAND GUIDANCE
     # =====================================================
 
@@ -341,15 +421,16 @@ def route_message(
         }
 
     # =====================================================
-    # UNKNOWN COMMAND
+    # UNKNOWN OR CURRENTLY UNSUPPORTED REQUEST
     # =====================================================
 
     return {
         "response_type": "text",
         "body": (
-            "Sorry, I could not understand that request.\n\n"
-            "Currently available commands:\n\n"
-            "• Yesterday Sales\n\n"
+            "I understood your message, but I cannot "
+            "answer that request yet.\n\n"
+            "Currently available:\n\n"
+            "• Overall yesterday sales and performance\n\n"
             "• Sales from 01-Jul-2026 "
             "to 14-Jul-2026\n\n"
             "• Compare 01-Apr-2025 30-Jun-2025 "

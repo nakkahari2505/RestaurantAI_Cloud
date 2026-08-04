@@ -7,23 +7,29 @@ from twilio.twiml.messaging_response import MessagingResponse
 
 from services.data_loader import load_auberry_workbook
 from services.formatter import format_yesterday_sales_report
-from services.message_router import route_message
-from services.sales_for_a_period import get_store_performance_report
-from services.sales_for_a_period_image import (
-    generate_sales_for_a_period_image,
-)
 from services.kpi_period_comparison import (
     get_kpi_period_comparison_report,
 )
 from services.kpi_period_comparison_image import (
     generate_kpi_period_comparison_image,
 )
-from services.yesterday_sales import get_yesterday_sales_report
+from services.message_router import route_message
+from services.sales_for_a_period import (
+    get_store_performance_report,
+)
+from services.sales_for_a_period_image import (
+    generate_sales_for_a_period_image,
+)
+from services.yesterday_sales import (
+    get_yesterday_sales_report,
+)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("Loading Auberry workbook into memory...")
+    print(
+        "Loading Auberry workbook into memory..."
+    )
 
     data = load_auberry_workbook()
 
@@ -35,13 +41,23 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(
+    lifespan=lifespan
+)
+
 
 app.mount(
     "/static",
-    StaticFiles(directory="static"),
+    StaticFiles(
+        directory="static"
+    ),
     name="static",
 )
+
+
+# =========================================================
+# APPLICATION STATUS
+# =========================================================
 
 
 @app.get("/")
@@ -57,17 +73,30 @@ def test_data():
     data = load_auberry_workbook()
 
     return {
-        "sales_rows": len(data["sales"]),
-        "store_rows": len(data["store_info"]),
-        "category_rows": len(data["item_category"]),
+        "sales_rows": len(
+            data["sales"]
+        ),
+        "store_rows": len(
+            data["store_info"]
+        ),
+        "category_rows": len(
+            data["item_category"]
+        ),
     }
+
+
+# =========================================================
+# CAPABILITY 1: YESTERDAY SALES
+# =========================================================
 
 
 @app.get("/yesterday")
 def yesterday_sales():
     data = load_auberry_workbook()
 
-    return get_yesterday_sales_report(data)
+    return get_yesterday_sales_report(
+        data
+    )
 
 
 @app.get(
@@ -76,15 +105,25 @@ def yesterday_sales():
 )
 def yesterday_sales_message():
     data = load_auberry_workbook()
-    report = get_yesterday_sales_report(data)
 
-    return format_yesterday_sales_report(report)
+    report = get_yesterday_sales_report(
+        data
+    )
+
+    return format_yesterday_sales_report(
+        report
+    )
+
+
+# =========================================================
+# CAPABILITY 2: SALES FOR A PERIOD
+# =========================================================
 
 
 @app.get("/sales-for-a-period-image")
 def sales_for_a_period_image(
-    start_date: str = "01 Apr 2026",
-    end_date: str = "30 Apr 2026",
+    start_date: str = "01-Apr-2026",
+    end_date: str = "30-Apr-2026",
 ):
     data = load_auberry_workbook()
 
@@ -94,8 +133,10 @@ def sales_for_a_period_image(
         end_date_text=end_date,
     )
 
-    image_result = generate_sales_for_a_period_image(
-        report
+    image_result = (
+        generate_sales_for_a_period_image(
+            report
+        )
     )
 
     return FileResponse(
@@ -104,14 +145,194 @@ def sales_for_a_period_image(
     )
 
 
+# =========================================================
+# CAPABILITY 3: KPI PERIOD COMPARISON
+# =========================================================
+
+
+@app.get("/compare-test")
+def compare_test():
+    data = load_auberry_workbook()
+
+    report = (
+        get_kpi_period_comparison_report(
+            data=data,
+            from_start_date_text=(
+                "01-Apr-2025"
+            ),
+            from_end_date_text=(
+                "30-Jun-2025"
+            ),
+            to_start_date_text=(
+                "01-Apr-2026"
+            ),
+            to_end_date_text=(
+                "30-Jun-2026"
+            ),
+        )
+    )
+
+    return report
+
+
+@app.get("/compare-image-test")
+def compare_image_test():
+    data = load_auberry_workbook()
+
+    report = (
+        get_kpi_period_comparison_report(
+            data=data,
+            from_start_date_text=(
+                "01-Apr-2025"
+            ),
+            from_end_date_text=(
+                "30-Jun-2025"
+            ),
+            to_start_date_text=(
+                "01-Apr-2026"
+            ),
+            to_end_date_text=(
+                "30-Jun-2026"
+            ),
+        )
+    )
+
+    image_result = (
+        generate_kpi_period_comparison_image(
+            report
+        )
+    )
+
+    return FileResponse(
+        path=image_result["file_path"],
+        media_type="image/png",
+    )
+
+
+# =========================================================
+# GPT CONNECTION TEST
+# =========================================================
+
+
+@app.get("/llm-test")
+def llm_test():
+    """
+    Test basic OpenAI connectivity without involving:
+
+    - WhatsApp
+    - message routing
+    - sales calculations
+    - report generation
+    """
+    try:
+        from services.llm_service import (
+            llm_service,
+        )
+
+        response_text = (
+            llm_service.test_connection()
+        )
+
+        return {
+            "status": "success",
+            "response": response_text,
+        }
+
+    except Exception as error:
+        print(
+            "LLM connection test error:",
+            repr(error),
+        )
+
+        return {
+            "status": "error",
+            "error_type": type(
+                error
+            ).__name__,
+            "message": str(
+                error
+            ),
+        }
+
+
+# =========================================================
+# GPT INTENT TEST
+# =========================================================
+
+
+@app.get("/intent-test")
+def intent_test(
+    message: str = (
+        "How did we perform yesterday?"
+    ),
+):
+    """
+    Test RestaurantAI's natural-language intent parser.
+
+    This endpoint only performs:
+
+        User message
+            ↓
+        GPT intent extraction
+            ↓
+        Structured JSON
+
+    It does not:
+
+    - run a business engine,
+    - read sales data,
+    - generate a report,
+    - change WhatsApp routing.
+    """
+    try:
+        from services.intent_parser import (
+            parse_intent,
+        )
+
+        intent_result = parse_intent(
+            user_message=message
+        )
+
+        return {
+            "status": "success",
+            "input_message": message,
+            "intent": intent_result,
+        }
+
+    except Exception as error:
+        print(
+            "Intent parser test error:",
+            repr(error),
+        )
+
+        return {
+            "status": "error",
+            "input_message": message,
+            "error_type": type(
+                error
+            ).__name__,
+            "message": str(
+                error
+            ),
+        }
+
+
+# =========================================================
+# WHATSAPP
+# =========================================================
+
+
 @app.post("/whatsapp")
 async def whatsapp(
     request: Request,
     Body: str = Form(...),
 ):
-    routed_response = route_message(Body)
+    routed_response = route_message(
+        Body
+    )
 
     response = MessagingResponse()
+
     message = response.message()
 
     message.body(
@@ -122,16 +343,19 @@ async def whatsapp(
         routed_response["response_type"]
         == "media"
     ):
-        relative_media_url = routed_response[
-            "relative_media_url"
-        ]
+        relative_media_url = (
+            routed_response[
+                "relative_media_url"
+            ]
+        )
 
         base_url = str(
             request.base_url
         ).rstrip("/")
 
         public_media_url = (
-            f"{base_url}{relative_media_url}"
+            f"{base_url}"
+            f"{relative_media_url}"
         )
 
         print(
@@ -144,45 +368,15 @@ async def whatsapp(
         print(public_media_url)
         print("=" * 80)
 
-        message.media(public_media_url)
+        message.media(
+            public_media_url
+        )
 
-        print("Media added to Twilio response.")
+        print(
+            "Media added to Twilio response."
+        )
 
     return PlainTextResponse(
         content=str(response),
         media_type="application/xml",
-    )
-
-@app.get("/compare-test")
-def compare_test():
-    data = load_auberry_workbook()
-
-    report = get_kpi_period_comparison_report(
-        data=data,
-        from_start_date_text="01-Apr-2025",
-        from_end_date_text="30-Jun-2025",
-        to_start_date_text="01-Apr-2026",
-        to_end_date_text="30-Jun-2026",
-    )
-
-    return report
-@app.get("/compare-image-test")
-def compare_image_test():
-    data = load_auberry_workbook()
-
-    report = get_kpi_period_comparison_report(
-        data=data,
-        from_start_date_text="01-Apr-2025",
-        from_end_date_text="30-Jun-2025",
-        to_start_date_text="01-Apr-2026",
-        to_end_date_text="30-Jun-2026",
-    )
-
-    image_result = generate_kpi_period_comparison_image(
-        report
-    )
-
-    return FileResponse(
-        path=image_result["file_path"],
-        media_type="image/png",
     )
