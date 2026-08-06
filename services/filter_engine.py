@@ -1,4 +1,5 @@
 from typing import Any, Final
+import unicodedata
 
 import pandas as pd
 
@@ -36,13 +37,33 @@ def _clean_text(
     value: Any,
 ) -> str:
     """
-    Convert a value into clean display text.
+    Convert a value into clean, consistently comparable text.
+
+    In addition to ordinary trimming, this removes invisible
+    zero-width characters and normalizes Unicode so visually
+    identical category/item names match deterministically.
     """
     if pd.isna(value):
         return ""
 
+    cleaned_value = unicodedata.normalize(
+        "NFKC",
+        str(value),
+    )
+
+    for invisible_character in (
+        "\u200b",
+        "\u200c",
+        "\u200d",
+        "\ufeff",
+    ):
+        cleaned_value = cleaned_value.replace(
+            invisible_character,
+            "",
+        )
+
     return " ".join(
-        str(value).strip().split()
+        cleaned_value.strip().split()
     )
 
 
@@ -645,8 +666,15 @@ def _apply_product_filter(
     """
     Apply canonical Category and Item filters.
 
-    Product Builder is used to verify that requested
-    canonical names genuinely exist for the active client.
+    Category matching deliberately uses two valid paths:
+
+    1. Direct match against the physical Category column.
+    2. Membership of Item Name in the Product Builder's
+       category-to-item dictionary.
+
+    This prevents a genuine category result from becoming
+    zero merely because some transaction rows contain an
+    inconsistent, blank or visually different Category value.
     """
     requested_categories = ral_request[
         "categories"
@@ -668,13 +696,19 @@ def _apply_product_filter(
         )
     )
 
-    valid_categories = {
+    normalized_category_definitions = {
         _normalize_text(
             category_name
-        )
-        for category_name
-        in product_dictionary.keys()
+        ): category_definition
+        for (
+            category_name,
+            category_definition,
+        ) in product_dictionary.items()
     }
+
+    valid_categories = set(
+        normalized_category_definitions.keys()
+    )
 
     valid_items: set[str] = set()
 
@@ -686,12 +720,35 @@ def _apply_product_filter(
             {},
         )
 
-        for item_name in items:
+        for (
+            item_name,
+            item_definition,
+        ) in items.items():
             valid_items.add(
                 _normalize_text(
                     item_name
                 )
             )
+
+            for raw_name in item_definition.get(
+                "raw_names",
+                [],
+            ):
+                valid_items.add(
+                    _normalize_text(
+                        raw_name
+                    )
+                )
+
+            for alias in item_definition.get(
+                "aliases",
+                [],
+            ):
+                valid_items.add(
+                    _normalize_text(
+                        alias
+                    )
+                )
 
     normalized_requested_categories = {
         _normalize_text(
@@ -740,7 +797,55 @@ def _apply_product_filter(
         )
 
     if requested_categories:
-        category_mask = (
+        accepted_category_item_names: set[str] = set()
+
+        for normalized_category in (
+            normalized_requested_categories
+        ):
+            category_definition = (
+                normalized_category_definitions[
+                    normalized_category
+                ]
+            )
+
+            category_items = (
+                category_definition.get(
+                    "items",
+                    {},
+                )
+            )
+
+            for (
+                item_name,
+                item_definition,
+            ) in category_items.items():
+                accepted_category_item_names.add(
+                    _normalize_text(
+                        item_name
+                    )
+                )
+
+                for raw_name in item_definition.get(
+                    "raw_names",
+                    [],
+                ):
+                    accepted_category_item_names.add(
+                        _normalize_text(
+                            raw_name
+                        )
+                    )
+
+                for alias in item_definition.get(
+                    "aliases",
+                    [],
+                ):
+                    accepted_category_item_names.add(
+                        _normalize_text(
+                            alias
+                        )
+                    )
+
+        direct_category_mask = (
             _normalized_series(
                 filtered_sales[
                     CATEGORY_COLUMN
@@ -748,6 +853,21 @@ def _apply_product_filter(
             ).isin(
                 normalized_requested_categories
             )
+        )
+
+        item_membership_mask = (
+            _normalized_series(
+                filtered_sales[
+                    ITEM_COLUMN
+                ]
+            ).isin(
+                accepted_category_item_names
+            )
+        )
+
+        category_mask = (
+            direct_category_mask
+            | item_membership_mask
         )
 
         filtered_sales = filtered_sales.loc[
