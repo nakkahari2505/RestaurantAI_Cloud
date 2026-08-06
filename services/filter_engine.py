@@ -1,0 +1,855 @@
+from typing import Any, Final
+
+import pandas as pd
+
+from services.builders.channel_builder import (
+    CHANNEL_DELIVERY,
+    build_channel_dictionary,
+)
+from services.builders.product_builder import (
+    build_product_dictionary,
+)
+from services.builders.store_builder import (
+    build_store_dictionary,
+)
+
+
+# =========================================================
+# AUBERRY V1 SOURCE COLUMNS
+# =========================================================
+
+SALES_SHEET_KEY: Final[str] = "sales"
+
+DATE_COLUMN: Final[str] = "Date"
+SOURCE_STORE_COLUMN: Final[str] = "Restaurant"
+CHANNEL_COLUMN: Final[str] = "Area"
+CATEGORY_COLUMN: Final[str] = "Category"
+ITEM_COLUMN: Final[str] = "Item Name"
+
+
+# =========================================================
+# TEXT HELPERS
+# =========================================================
+
+
+def _clean_text(
+    value: Any,
+) -> str:
+    """
+    Convert a value into clean display text.
+    """
+    if pd.isna(value):
+        return ""
+
+    return " ".join(
+        str(value).strip().split()
+    )
+
+
+def _normalize_text(
+    value: Any,
+) -> str:
+    """
+    Normalize text for deterministic matching.
+
+    This is used only for comparisons.
+    It does not change the original DataFrame values.
+    """
+    return _clean_text(
+        value
+    ).lower()
+
+
+def _normalized_series(
+    series: pd.Series,
+) -> pd.Series:
+    """
+    Return a normalized text version of a pandas Series.
+    """
+    return (
+        series
+        .fillna("")
+        .map(_normalize_text)
+    )
+
+
+# =========================================================
+# VALIDATION
+# =========================================================
+
+
+def _validate_filter_inputs(
+    data: dict,
+    ral_request: dict,
+) -> None:
+    """
+    Validate the minimum structure required by the
+    RAL Filter Engine.
+    """
+    if not isinstance(
+        data,
+        dict,
+    ):
+        raise ValueError(
+            "Client data must be an object."
+        )
+
+    if SALES_SHEET_KEY not in data:
+        raise ValueError(
+            "Sales data was not found."
+        )
+
+    if not isinstance(
+        ral_request,
+        dict,
+    ):
+        raise ValueError(
+            "RAL request must be an object."
+        )
+
+    required_ral_fields = {
+        "time",
+        "stores",
+        "regions",
+        "channels",
+        "aggregators",
+        "categories",
+        "items",
+    }
+
+    missing_ral_fields = (
+        required_ral_fields
+        - set(ral_request.keys())
+    )
+
+    if missing_ral_fields:
+        raise ValueError(
+            "RAL request is missing filter fields: "
+            + ", ".join(
+                sorted(missing_ral_fields)
+            )
+        )
+
+    if ral_request["regions"]:
+        raise ValueError(
+            "Region filtering is not connected yet."
+        )
+
+
+def _validate_sales_columns(
+    sales: pd.DataFrame,
+) -> None:
+    """
+    Validate the physical Auberry columns currently required
+    by the filter engine.
+    """
+    required_columns = {
+        DATE_COLUMN,
+        SOURCE_STORE_COLUMN,
+        CHANNEL_COLUMN,
+        CATEGORY_COLUMN,
+        ITEM_COLUMN,
+    }
+
+    missing_columns = (
+        required_columns
+        - set(sales.columns)
+    )
+
+    if missing_columns:
+        raise ValueError(
+            "Sales data is missing required columns: "
+            + ", ".join(
+                sorted(missing_columns)
+            )
+        )
+
+
+# =========================================================
+# TIME FILTER
+# =========================================================
+
+
+def _apply_time_filter(
+    sales: pd.DataFrame,
+    ral_request: dict,
+) -> pd.DataFrame:
+    """
+    Apply the inclusive RAL start-date and end-date filter.
+
+    Relative periods such as last_month must already have
+    been resolved by services.vocabulary.time.resolve_ral_time.
+    """
+    time_value = ral_request[
+        "time"
+    ]
+
+    if not isinstance(
+        time_value,
+        dict,
+    ):
+        raise ValueError(
+            "RAL time must be an object."
+        )
+
+    start_date_text = time_value.get(
+        "start_date"
+    )
+
+    end_date_text = time_value.get(
+        "end_date"
+    )
+
+    if (
+        start_date_text is None
+        and end_date_text is None
+    ):
+        raise ValueError(
+            "The requested time period has not been "
+            "resolved into dates."
+        )
+
+    if (
+        start_date_text is None
+        or end_date_text is None
+    ):
+        raise ValueError(
+            "Both start_date and end_date are required."
+        )
+
+    try:
+        start_date = pd.Timestamp(
+            start_date_text
+        ).normalize()
+
+        end_date = pd.Timestamp(
+            end_date_text
+        ).normalize()
+
+    except Exception as error:
+        raise ValueError(
+            "RAL dates must use valid YYYY-MM-DD values."
+        ) from error
+
+    if start_date > end_date:
+        raise ValueError(
+            "The start date cannot be after the end date."
+        )
+
+    parsed_sales_dates = pd.to_datetime(
+        sales[DATE_COLUMN],
+        errors="coerce",
+        dayfirst=True,
+    ).dt.normalize()
+
+    valid_date_mask = (
+        parsed_sales_dates.notna()
+        & parsed_sales_dates.between(
+            start_date,
+            end_date,
+            inclusive="both",
+        )
+    )
+
+    return sales.loc[
+        valid_date_mask
+    ].copy()
+
+
+# =========================================================
+# STORE FILTER
+# =========================================================
+
+
+def _apply_store_filter(
+    filtered_sales: pd.DataFrame,
+    data: dict,
+    ral_request: dict,
+) -> pd.DataFrame:
+    """
+    Filter raw Restaurant values using the canonical stores
+    selected by RAL.
+
+    The Store Builder supplies the relationship:
+
+        raw Restaurant name
+            ->
+        canonical short store name
+    """
+    requested_stores = ral_request[
+        "stores"
+    ]
+
+    if not requested_stores:
+        return filtered_sales
+
+    store_dictionary = (
+        build_store_dictionary(
+            data=data
+        )
+    )
+
+    requested_canonical_names = {
+        _normalize_text(
+            store_name
+        )
+        for store_name in requested_stores
+    }
+
+    accepted_raw_store_names: set[str] = set()
+
+    unresolved_stores: list[str] = []
+
+    for requested_store in requested_stores:
+        requested_normalized = (
+            _normalize_text(
+                requested_store
+            )
+        )
+
+        matching_definition = None
+
+        for (
+            canonical_name,
+            store_definition,
+        ) in store_dictionary.items():
+            if (
+                _normalize_text(
+                    canonical_name
+                )
+                == requested_normalized
+            ):
+                matching_definition = (
+                    store_definition
+                )
+
+                break
+
+        if matching_definition is None:
+            unresolved_stores.append(
+                requested_store
+            )
+
+            continue
+
+        aliases = matching_definition.get(
+            "aliases",
+            [],
+        )
+
+        for alias in aliases:
+            accepted_raw_store_names.add(
+                _normalize_text(
+                    alias
+                )
+            )
+
+    if unresolved_stores:
+        raise ValueError(
+            "Unknown store selection: "
+            + ", ".join(
+                unresolved_stores
+            )
+        )
+
+    # Include canonical names themselves as an additional
+    # safeguard when the raw sales data already uses them.
+    accepted_raw_store_names.update(
+        requested_canonical_names
+    )
+
+    store_mask = _normalized_series(
+        filtered_sales[
+            SOURCE_STORE_COLUMN
+        ]
+    ).isin(
+        accepted_raw_store_names
+    )
+
+    return filtered_sales.loc[
+        store_mask
+    ].copy()
+
+
+# =========================================================
+# CHANNEL AND AGGREGATOR FILTER
+# =========================================================
+
+
+def _get_channel_raw_values(
+    channel_dictionary: dict[str, dict],
+    requested_channels: list[str],
+) -> set[str]:
+    """
+    Return all physical Area values belonging to the
+    requested canonical parent channels.
+    """
+    accepted_raw_values: set[str] = set()
+
+    unresolved_channels: list[str] = []
+
+    for requested_channel in requested_channels:
+        matching_definition = None
+
+        for (
+            canonical_name,
+            channel_definition,
+        ) in channel_dictionary.items():
+            if (
+                _normalize_text(
+                    canonical_name
+                )
+                == _normalize_text(
+                    requested_channel
+                )
+            ):
+                matching_definition = (
+                    channel_definition
+                )
+
+                break
+
+        if matching_definition is None:
+            unresolved_channels.append(
+                requested_channel
+            )
+
+            continue
+
+        raw_values = matching_definition.get(
+            "raw_values",
+            [],
+        )
+
+        for raw_value in raw_values:
+            accepted_raw_values.add(
+                _normalize_text(
+                    raw_value
+                )
+            )
+
+    if unresolved_channels:
+        raise ValueError(
+            "Unknown channel selection: "
+            + ", ".join(
+                unresolved_channels
+            )
+        )
+
+    return accepted_raw_values
+
+
+def _get_aggregator_raw_values(
+    channel_dictionary: dict[str, dict],
+    requested_aggregators: list[str],
+) -> set[str]:
+    """
+    Return physical Area values belonging to the requested
+    Delivery aggregators.
+    """
+    accepted_raw_values: set[str] = set()
+
+    delivery_definition = (
+        channel_dictionary.get(
+            CHANNEL_DELIVERY,
+            {},
+        )
+    )
+
+    aggregator_dictionary = (
+        delivery_definition.get(
+            "aggregators",
+            {},
+        )
+    )
+
+    unresolved_aggregators: list[str] = []
+
+    for requested_aggregator in requested_aggregators:
+        matching_definition = None
+
+        for (
+            canonical_name,
+            aggregator_definition,
+        ) in aggregator_dictionary.items():
+            if (
+                _normalize_text(
+                    canonical_name
+                )
+                == _normalize_text(
+                    requested_aggregator
+                )
+            ):
+                matching_definition = (
+                    aggregator_definition
+                )
+
+                break
+
+        if matching_definition is None:
+            unresolved_aggregators.append(
+                requested_aggregator
+            )
+
+            continue
+
+        raw_values = matching_definition.get(
+            "raw_values",
+            [],
+        )
+
+        for raw_value in raw_values:
+            accepted_raw_values.add(
+                _normalize_text(
+                    raw_value
+                )
+            )
+
+    if unresolved_aggregators:
+        raise ValueError(
+            "Unknown aggregator selection: "
+            + ", ".join(
+                unresolved_aggregators
+            )
+        )
+
+    return accepted_raw_values
+
+
+def _apply_channel_filter(
+    filtered_sales: pd.DataFrame,
+    data: dict,
+    ral_request: dict,
+) -> pd.DataFrame:
+    """
+    Apply parent-channel and aggregator filters.
+
+    Examples:
+
+        channels = ["Delivery"]
+        aggregators = []
+
+        means all Delivery business.
+
+        channels = ["Delivery"]
+        aggregators = ["Swiggy"]
+
+        means only Swiggy rows within Delivery.
+    """
+    requested_channels = ral_request[
+        "channels"
+    ]
+
+    requested_aggregators = ral_request[
+        "aggregators"
+    ]
+
+    if (
+        not requested_channels
+        and not requested_aggregators
+    ):
+        return filtered_sales
+
+    channel_dictionary = (
+        build_channel_dictionary(
+            data=data
+        )
+    )
+
+    normalized_area = _normalized_series(
+        filtered_sales[
+            CHANNEL_COLUMN
+        ]
+    )
+
+    if requested_channels:
+        channel_raw_values = (
+            _get_channel_raw_values(
+                channel_dictionary=(
+                    channel_dictionary
+                ),
+                requested_channels=(
+                    requested_channels
+                ),
+            )
+        )
+
+        channel_mask = normalized_area.isin(
+            channel_raw_values
+        )
+
+        filtered_sales = filtered_sales.loc[
+            channel_mask
+        ].copy()
+
+    if requested_aggregators:
+        # A specific aggregator is always part of Delivery.
+        if (
+            requested_channels
+            and CHANNEL_DELIVERY.lower()
+            not in {
+                _normalize_text(
+                    channel_name
+                )
+                for channel_name
+                in requested_channels
+            }
+        ):
+            raise ValueError(
+                "An aggregator filter must belong to "
+                "the Delivery channel."
+            )
+
+        aggregator_raw_values = (
+            _get_aggregator_raw_values(
+                channel_dictionary=(
+                    channel_dictionary
+                ),
+                requested_aggregators=(
+                    requested_aggregators
+                ),
+            )
+        )
+
+        normalized_filtered_area = (
+            _normalized_series(
+                filtered_sales[
+                    CHANNEL_COLUMN
+                ]
+            )
+        )
+
+        aggregator_mask = (
+            normalized_filtered_area.isin(
+                aggregator_raw_values
+            )
+        )
+
+        filtered_sales = filtered_sales.loc[
+            aggregator_mask
+        ].copy()
+
+    return filtered_sales
+
+
+# =========================================================
+# CATEGORY AND ITEM FILTER
+# =========================================================
+
+
+def _apply_product_filter(
+    filtered_sales: pd.DataFrame,
+    data: dict,
+    ral_request: dict,
+) -> pd.DataFrame:
+    """
+    Apply canonical Category and Item filters.
+
+    Product Builder is used to verify that requested
+    canonical names genuinely exist for the active client.
+    """
+    requested_categories = ral_request[
+        "categories"
+    ]
+
+    requested_items = ral_request[
+        "items"
+    ]
+
+    if (
+        not requested_categories
+        and not requested_items
+    ):
+        return filtered_sales
+
+    product_dictionary = (
+        build_product_dictionary(
+            data=data
+        )
+    )
+
+    valid_categories = {
+        _normalize_text(
+            category_name
+        )
+        for category_name
+        in product_dictionary.keys()
+    }
+
+    valid_items: set[str] = set()
+
+    for category_definition in (
+        product_dictionary.values()
+    ):
+        items = category_definition.get(
+            "items",
+            {},
+        )
+
+        for item_name in items:
+            valid_items.add(
+                _normalize_text(
+                    item_name
+                )
+            )
+
+    normalized_requested_categories = {
+        _normalize_text(
+            category_name
+        )
+        for category_name
+        in requested_categories
+    }
+
+    normalized_requested_items = {
+        _normalize_text(
+            item_name
+        )
+        for item_name
+        in requested_items
+    }
+
+    unknown_categories = (
+        normalized_requested_categories
+        - valid_categories
+    )
+
+    if unknown_categories:
+        raise ValueError(
+            "Unknown category selection: "
+            + ", ".join(
+                sorted(
+                    unknown_categories
+                )
+            )
+        )
+
+    unknown_items = (
+        normalized_requested_items
+        - valid_items
+    )
+
+    if unknown_items:
+        raise ValueError(
+            "Unknown item selection: "
+            + ", ".join(
+                sorted(
+                    unknown_items
+                )
+            )
+        )
+
+    if requested_categories:
+        category_mask = (
+            _normalized_series(
+                filtered_sales[
+                    CATEGORY_COLUMN
+                ]
+            ).isin(
+                normalized_requested_categories
+            )
+        )
+
+        filtered_sales = filtered_sales.loc[
+            category_mask
+        ].copy()
+
+    if requested_items:
+        item_mask = (
+            _normalized_series(
+                filtered_sales[
+                    ITEM_COLUMN
+                ]
+            ).isin(
+                normalized_requested_items
+            )
+        )
+
+        filtered_sales = filtered_sales.loc[
+            item_mask
+        ].copy()
+
+    return filtered_sales
+
+
+# =========================================================
+# PUBLIC FILTER ENGINE
+# =========================================================
+
+
+def apply_ral_filters(
+    data: dict,
+    ral_request: dict,
+) -> pd.DataFrame:
+    """
+    Apply all currently supported RAL dimensions to the
+    active client's sales data.
+
+    Filter order:
+
+        1. Time
+        2. Store
+        3. Channel
+        4. Aggregator
+        5. Category
+        6. Item
+
+    Returns a new filtered DataFrame.
+
+    This function deliberately does not calculate:
+
+    - Sales
+    - Quantity
+    - Transactions
+    - ADS
+    - ADT
+    - APT
+
+    Metric calculations remain the responsibility of
+    services/vocabulary/metrics.py.
+    """
+    _validate_filter_inputs(
+        data=data,
+        ral_request=ral_request,
+    )
+
+    sales = data[
+        SALES_SHEET_KEY
+    ].copy()
+
+    sales.columns = (
+        sales.columns
+        .astype(str)
+        .str.strip()
+    )
+
+    _validate_sales_columns(
+        sales
+    )
+
+    filtered_sales = _apply_time_filter(
+        sales=sales,
+        ral_request=ral_request,
+    )
+
+    filtered_sales = _apply_store_filter(
+        filtered_sales=filtered_sales,
+        data=data,
+        ral_request=ral_request,
+    )
+
+    filtered_sales = _apply_channel_filter(
+        filtered_sales=filtered_sales,
+        data=data,
+        ral_request=ral_request,
+    )
+
+    filtered_sales = _apply_product_filter(
+        filtered_sales=filtered_sales,
+        data=data,
+        ral_request=ral_request,
+    )
+
+    return filtered_sales.reset_index(
+        drop=True
+    )

@@ -1,7 +1,11 @@
 import re
 
-from services.data_loader import load_auberry_workbook
-from services.formatter import format_yesterday_sales_report
+from services.data_loader import (
+    load_auberry_workbook,
+)
+from services.formatter import (
+    format_yesterday_sales_report,
+)
 from services.kpi_period_comparison import (
     get_kpi_period_comparison_report,
 )
@@ -18,6 +22,10 @@ from services.yesterday_sales import (
     get_yesterday_sales_report,
 )
 
+
+# =========================================================
+# EXISTING FIXED-COMMAND PATTERNS
+# =========================================================
 
 DATE_TOKEN_PATTERN = (
     r"\d{1,2}(?:-[a-zA-Z]{3}-|\s+[a-zA-Z]{3}\s+)\d{4}"
@@ -41,6 +49,11 @@ COMPARISON_PATTERN = re.compile(
     rf"({DATE_TOKEN_PATTERN})$",
     re.IGNORECASE,
 )
+
+
+# =========================================================
+# COMMON HELPERS
+# =========================================================
 
 
 def _display_date(
@@ -67,7 +80,9 @@ def _display_date(
     day_text, month_text, year_text = parts
 
     try:
-        day_number = int(day_text)
+        day_number = int(
+            day_text
+        )
 
     except ValueError:
         return cleaned_date
@@ -79,12 +94,29 @@ def _display_date(
     )
 
 
+def _build_text_response(
+    body: str,
+) -> dict:
+    """
+    Build one standard WhatsApp text response.
+    """
+    return {
+        "response_type": "text",
+        "body": str(body),
+    }
+
+
+# =========================================================
+# EXISTING CAPABILITY 1: YESTERDAY SALES
+# =========================================================
+
+
 def _run_yesterday_sales() -> dict:
     """
     Run the existing deterministic Yesterday Sales engine.
 
-    Both the old fixed command and the new GPT intent path
-    call this same function.
+    Both the fixed command and compatible natural-language
+    requests may continue to use this stable capability.
     """
     data = load_auberry_workbook()
 
@@ -92,87 +124,300 @@ def _run_yesterday_sales() -> dict:
         data
     )
 
-    return {
-        "response_type": "text",
-        "body": format_yesterday_sales_report(
+    return _build_text_response(
+        format_yesterday_sales_report(
             report
-        ),
-    }
+        )
+    )
 
 
-def _try_llm_intent(
+# =========================================================
+# GENERIC RAL EXECUTION
+# =========================================================
+
+
+def _ral_is_ready_for_execution(
+    ral_request: dict,
+) -> bool:
+    """
+    Decide whether a RAL request is safe for the generic
+    deterministic execution flow.
+
+    The generic flow currently supports:
+
+    - one metric,
+    - one resolved date period,
+    - stores,
+    - channels,
+    - aggregators,
+    - categories,
+    - items.
+
+    It does not yet execute:
+
+    - unresolved or custom time periods,
+    - comparisons,
+    - clarification-dependent requests,
+    - region filters.
+    """
+    if not isinstance(
+        ral_request,
+        dict,
+    ):
+        return False
+
+    if ral_request.get(
+        "needs_clarification",
+        False,
+    ):
+        return False
+
+    clarification_question = (
+        ral_request.get(
+            "clarification_question"
+        )
+    )
+
+    if clarification_question:
+        return False
+
+    time_value = ral_request.get(
+        "time",
+        {},
+    )
+
+    if not isinstance(
+        time_value,
+        dict,
+    ):
+        return False
+
+    start_date = time_value.get(
+        "start_date"
+    )
+
+    end_date = time_value.get(
+        "end_date"
+    )
+
+    if not isinstance(
+        start_date,
+        str,
+    ):
+        return False
+
+    if not isinstance(
+        end_date,
+        str,
+    ):
+        return False
+
+    comparison = ral_request.get(
+        "comparison",
+        {},
+    )
+
+    if (
+        isinstance(
+            comparison,
+            dict,
+        )
+        and comparison.get(
+            "enabled",
+            False,
+        )
+    ):
+        return False
+
+    if ral_request.get(
+        "regions",
+        [],
+    ):
+        return False
+
+    metric_name = ral_request.get(
+        "metric"
+    )
+
+    if not isinstance(
+        metric_name,
+        str,
+    ):
+        return False
+
+    if not metric_name.strip():
+        return False
+
+    return True
+
+
+def _build_clarification_response(
+    ral_request: dict,
+) -> dict | None:
+    """
+    Return GPT's clarification question when RAL explicitly
+    requires clarification.
+    """
+    if not ral_request.get(
+        "needs_clarification",
+        False,
+    ):
+        return None
+
+    clarification_question = (
+        ral_request.get(
+            "clarification_question"
+        )
+    )
+
+    if not clarification_question:
+        return None
+
+    return _build_text_response(
+        clarification_question
+    )
+
+
+def _try_generic_ral_execution(
     user_message: str,
 ) -> dict | None:
     """
-    Try to understand an unmatched natural-language message.
+    Try the complete generic RestaurantAI flow:
+
+        Natural language
+            ↓
+        RAL
+            ↓
+        Deterministic filters
+            ↓
+        Metric calculation
+            ↓
+        WhatsApp formatter
 
     Returns:
-        A routed response when GPT identifies a supported intent.
 
-        None when:
-        - the request is unsupported,
-        - OpenAI is unavailable,
-        - intent parsing fails.
+        A WhatsApp text response when the request is
+        executable.
 
-    The import is kept inside this function so an LLM
-    configuration problem cannot prevent RestaurantAI
-    from starting.
+        A clarification response when clarification is
+        required.
+
+        None when the request is outside the currently
+        executable RAL scope.
+
+    Imports are kept inside this function so that an OpenAI
+    or optional execution dependency problem does not prevent
+    the whole application from starting.
     """
     try:
+        from services.filter_engine import (
+            apply_ral_filters,
+        )
+        from services.formatter import (
+            format_ral_metric_reply,
+        )
         from services.intent_parser import (
-            parse_intent,
+            parse_ral_request,
+        )
+        from services.vocabulary.metrics import (
+            calculate_metric,
         )
 
-        intent_result = parse_intent(
+        ral_request = parse_ral_request(
             user_message=user_message
         )
 
         print(
-            "LLM intent result:",
-            intent_result,
+            "Generic RAL request:",
+            ral_request,
         )
 
-        if (
-            intent_result["capability"]
-            == "yesterday_sales"
-        ):
-            return _run_yesterday_sales()
+        clarification_response = (
+            _build_clarification_response(
+                ral_request
+            )
+        )
 
-        return None
+        if clarification_response is not None:
+            return clarification_response
+
+        if not _ral_is_ready_for_execution(
+            ral_request
+        ):
+            return None
+
+        data = load_auberry_workbook()
+
+        filtered_sales = apply_ral_filters(
+            data=data,
+            ral_request=ral_request,
+        )
+
+        metric_value = calculate_metric(
+            metric_name=ral_request[
+                "metric"
+            ],
+            filtered_df=filtered_sales,
+        )
+
+        reply_text = format_ral_metric_reply(
+            ral_request=ral_request,
+            metric_value=metric_value,
+        )
+
+        print(
+            "Generic RAL result:",
+            {
+                "metric": ral_request[
+                    "metric"
+                ],
+                "matching_rows": len(
+                    filtered_sales
+                ),
+                "metric_value": metric_value,
+            },
+        )
+
+        return _build_text_response(
+            reply_text
+        )
+
+    except ValueError as error:
+        print(
+            "Generic RAL validation/execution error:",
+            repr(error),
+        )
+
+        return _build_text_response(
+            str(error)
+        )
 
     except Exception as error:
         print(
-            "LLM intent routing error:",
+            "Generic RAL execution error:",
             repr(error),
         )
 
         return None
 
 
+# =========================================================
+# MAIN WHATSAPP ROUTER
+# =========================================================
+
+
 def route_message(
     message: str,
 ) -> dict:
     """
-    Route a WhatsApp message and return either:
-
-    {
-        "response_type": "text",
-        "body": "..."
-    }
-
-    or:
-
-    {
-        "response_type": "media",
-        "body": "...",
-        "relative_media_url": "/static/reports/....png"
-    }
+    Route a WhatsApp message.
 
     Routing order:
 
-    1. Existing deterministic commands
-    2. GPT natural-language intent fallback
-    3. Existing command guidance
+    1. Stable existing deterministic commands.
+    2. Generic RAL execution.
+    3. Specific invalid-command guidance.
+    4. Unsupported-request message.
     """
     normalized_message = " ".join(
         str(message).strip().split()
@@ -182,6 +427,11 @@ def route_message(
         normalized_message.lower()
     )
 
+    if not normalized_message:
+        return _build_text_response(
+            "Please send a restaurant business question."
+        )
+
     yesterday_commands = {
         "yesterday sales",
         "yesterdays sales",
@@ -190,7 +440,7 @@ def route_message(
 
     # =====================================================
     # CAPABILITY 1: YESTERDAY SALES
-    # EXISTING DETERMINISTIC COMMAND
+    # STABLE EXISTING COMMAND
     # =====================================================
 
     if normalized_lower in yesterday_commands:
@@ -198,11 +448,13 @@ def route_message(
 
     # =====================================================
     # CAPABILITY 2: SALES FOR A PERIOD
-    # EXISTING DETERMINISTIC COMMAND
+    # STABLE EXISTING COMMAND
     # =====================================================
 
-    sales_period_match = SALES_PERIOD_PATTERN.match(
-        normalized_message
+    sales_period_match = (
+        SALES_PERIOD_PATTERN.match(
+            normalized_message
+        )
     )
 
     if sales_period_match:
@@ -217,10 +469,16 @@ def route_message(
         data = load_auberry_workbook()
 
         try:
-            report = get_store_performance_report(
-                data=data,
-                start_date_text=start_date_text,
-                end_date_text=end_date_text,
+            report = (
+                get_store_performance_report(
+                    data=data,
+                    start_date_text=(
+                        start_date_text
+                    ),
+                    end_date_text=(
+                        end_date_text
+                    ),
+                )
             )
 
             image_result = (
@@ -230,10 +488,9 @@ def route_message(
             )
 
         except ValueError as error:
-            return {
-                "response_type": "text",
-                "body": str(error),
-            }
+            return _build_text_response(
+                str(error)
+            )
 
         except Exception as error:
             print(
@@ -241,13 +498,10 @@ def route_message(
                 repr(error),
             )
 
-            return {
-                "response_type": "text",
-                "body": (
-                    "The sales report could not be generated. "
-                    "Please try again."
-                ),
-            }
+            return _build_text_response(
+                "The sales report could not be generated. "
+                "Please try again."
+            )
 
         start_date_display = _display_date(
             start_date_text
@@ -265,17 +519,21 @@ def route_message(
                 f"{end_date_display}"
             ),
             "relative_media_url": (
-                image_result["relative_url"]
+                image_result[
+                    "relative_url"
+                ]
             ),
         }
 
     # =====================================================
     # CAPABILITY 3: KPI PERIOD COMPARISON
-    # EXISTING DETERMINISTIC COMMAND
+    # STABLE EXISTING COMMAND
     # =====================================================
 
-    comparison_match = COMPARISON_PATTERN.match(
-        normalized_message
+    comparison_match = (
+        COMPARISON_PATTERN.match(
+            normalized_message
+        )
     )
 
     if comparison_match:
@@ -323,10 +581,9 @@ def route_message(
             )
 
         except ValueError as error:
-            return {
-                "response_type": "text",
-                "body": str(error),
-            }
+            return _build_text_response(
+                str(error)
+            )
 
         except Exception as error:
             print(
@@ -334,13 +591,10 @@ def route_message(
                 repr(error),
             )
 
-            return {
-                "response_type": "text",
-                "body": (
-                    "The comparison report could not "
-                    "be generated. Please try again."
-                ),
-            }
+            return _build_text_response(
+                "The comparison report could not "
+                "be generated. Please try again."
+            )
 
         from_start_display = _display_date(
             from_start_date_text
@@ -369,71 +623,67 @@ def route_message(
                 f"{to_end_display}"
             ),
             "relative_media_url": (
-                image_result["relative_url"]
+                image_result[
+                    "relative_url"
+                ]
             ),
         }
 
     # =====================================================
-    # GPT NATURAL-LANGUAGE FALLBACK
+    # GENERIC RAL EXECUTION
     # =====================================================
 
-    llm_routed_response = _try_llm_intent(
-        user_message=normalized_message
+    generic_response = (
+        _try_generic_ral_execution(
+            user_message=normalized_message
+        )
     )
 
-    if llm_routed_response is not None:
-        return llm_routed_response
+    if generic_response is not None:
+        return generic_response
 
     # =====================================================
-    # SPECIFIC INVALID-COMMAND GUIDANCE
+    # INVALID FIXED-COMMAND GUIDANCE
     # =====================================================
 
     if normalized_lower.startswith(
         "compare"
     ):
-        return {
-            "response_type": "text",
-            "body": (
-                "Please use the comparison command "
-                "in this format:\n\n"
-                "Compare DD-Mmm-YYYY DD-Mmm-YYYY "
-                "DD-Mmm-YYYY DD-Mmm-YYYY\n\n"
-                "Example:\n"
-                "Compare 01-Apr-2025 30-Jun-2025 "
-                "01-Apr-2026 30-Jun-2026"
-            ),
-        }
+        return _build_text_response(
+            "This comparison could not yet be executed.\n\n"
+            "For the existing comparison report, use:\n\n"
+            "Compare DD-Mmm-YYYY DD-Mmm-YYYY "
+            "DD-Mmm-YYYY DD-Mmm-YYYY\n\n"
+            "Example:\n"
+            "Compare 01-Apr-2025 30-Jun-2025 "
+            "01-Apr-2026 30-Jun-2026"
+        )
 
     if normalized_lower.startswith(
-        "sales"
+        "sales from"
     ):
-        return {
-            "response_type": "text",
-            "body": (
-                "Please use the sales command "
-                "in this format:\n\n"
-                "Sales from DD-Mmm-YYYY "
-                "to DD-Mmm-YYYY\n\n"
-                "Example:\n"
-                "Sales from 01-Jul-2026 "
-                "to 14-Jul-2026"
-            ),
-        }
+        return _build_text_response(
+            "Please use the sales-period command "
+            "in this format:\n\n"
+            "Sales from DD-Mmm-YYYY "
+            "to DD-Mmm-YYYY\n\n"
+            "Example:\n"
+            "Sales from 01-Jul-2026 "
+            "to 14-Jul-2026"
+        )
 
     # =====================================================
-    # UNKNOWN OR CURRENTLY UNSUPPORTED REQUEST
+    # CURRENTLY UNSUPPORTED REQUEST
     # =====================================================
 
-    return {
-        "response_type": "text",
-        "body": (
-            "I understood your message, but I cannot "
-            "answer that request yet.\n\n"
-            "Currently available:\n\n"
-            "• Overall yesterday sales and performance\n\n"
-            "• Sales from 01-Jul-2026 "
-            "to 14-Jul-2026\n\n"
-            "• Compare 01-Apr-2025 30-Jun-2025 "
-            "01-Apr-2026 30-Jun-2026"
-        ),
-    }
+    return _build_text_response(
+        "I understood your message, but I could not safely "
+        "execute it yet.\n\n"
+        "You can ask questions using combinations of:\n\n"
+        "• Sales, Quantity, Transactions, ADS, ADT or APT\n"
+        "• A supported date or period\n"
+        "• Store\n"
+        "• Channel or Aggregator\n"
+        "• Category\n"
+        "• Item"
+    )
