@@ -1,4 +1,7 @@
 import re
+import shutil
+from pathlib import Path
+from uuid import uuid4
 
 from services.data_loader import (
     load_auberry_workbook,
@@ -106,6 +109,118 @@ def _build_text_response(
     }
 
 
+def _build_media_response(
+    body: str,
+    relative_media_url: str,
+) -> dict:
+    """
+    Build one standard WhatsApp media response.
+
+    main.py already converts relative_media_url into the
+    public Railway/local URL used by Twilio.
+    """
+    return {
+        "response_type": "media",
+        "body": str(body),
+        "relative_media_url": str(
+            relative_media_url
+        ),
+    }
+
+
+def _publish_chart_for_whatsapp(
+    chart_path: Path,
+) -> str:
+    """
+    Copy a generated chart into the existing /static mount so
+    Twilio can retrieve it through a public URL.
+
+    Chart Engine owns rendering.
+    Message Router owns delivery preparation.
+
+    A unique filename is used so WhatsApp/Twilio cannot show
+    a stale cached image from an earlier request.
+    """
+    source_path = Path(
+        chart_path
+    )
+
+    if not source_path.exists():
+        raise FileNotFoundError(
+            "Generated chart file was not found: "
+            f"{source_path}"
+        )
+
+    project_root = (
+        Path(__file__)
+        .resolve()
+        .parent
+        .parent
+    )
+
+    static_reports_directory = (
+        project_root
+        / "static"
+        / "reports"
+    )
+
+    static_reports_directory.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    public_file_name = (
+        f"restaurantai_chart_"
+        f"{uuid4().hex}.png"
+    )
+
+    public_file_path = (
+        static_reports_directory
+        / public_file_name
+    )
+
+    shutil.copy2(
+        source_path,
+        public_file_path,
+    )
+
+    return (
+        f"/static/reports/"
+        f"{public_file_name}"
+    )
+
+
+def _build_chart_caption(
+    chart_spec: dict,
+) -> str:
+    """
+    Build the short text that accompanies a WhatsApp chart.
+    """
+    title = str(
+        chart_spec.get(
+            "title",
+            "RestaurantAI",
+        )
+    ).strip()
+
+    subtitle = str(
+        chart_spec.get(
+            "subtitle",
+            "",
+        )
+    ).strip()
+
+    if subtitle:
+        return (
+            f"📊 {title}\n"
+            f"{subtitle}"
+        )
+
+    return (
+        f"📊 {title}"
+    )
+
+
 # =========================================================
 # EXISTING CAPABILITY 1: YESTERDAY SALES
 # =========================================================
@@ -151,12 +266,17 @@ def _ral_is_ready_for_execution(
     - channels,
     - aggregators,
     - categories,
-    - items.
+    - items,
+    - single or multi-dimensional grouping,
+    - daily / weekly / monthly trends,
+    - text presentation,
+    - line-chart presentation,
+    - bar-chart presentation.
 
     It does not yet execute:
 
-    - unresolved or custom time periods,
-    - comparisons,
+    - unresolved time periods,
+    - comparisons through the generic RAL path,
     - clarification-dependent requests,
     - region filters.
     """
@@ -282,7 +402,7 @@ def _try_generic_ral_execution(
     user_message: str,
 ) -> dict | None:
     """
-    Try the complete generic RestaurantAI flow:
+    Execute the generic RestaurantAI pipeline.
 
         Natural language
             ↓
@@ -290,38 +410,49 @@ def _try_generic_ral_execution(
             ↓
         Deterministic filters
             ↓
-        Metric calculation
+        One of:
+            - Metric Engine
+            - Grouping Engine
+            - Trend Engine
             ↓
-        WhatsApp formatter
+        Presentation Engine
+            ↓
+        One of:
+            - WhatsApp text
+            - Chart Engine -> PNG -> WhatsApp media
 
-    Returns:
-
-        A WhatsApp text response when the request is
-        executable.
-
-        A clarification response when clarification is
-        required.
-
-        None when the request is outside the currently
-        executable RAL scope.
-
-    Imports are kept inside this function so that an OpenAI
-    or optional execution dependency problem does not prevent
-    the whole application from starting.
+    Stable fixed commands are still handled before this
+    function by route_message().
     """
     try:
+        from services.chart_engine import (
+            render_chart,
+        )
         from services.filter_engine import (
             apply_ral_filters,
         )
         from services.formatter import (
             format_ral_metric_reply,
         )
+        from services.grouping_engine import (
+            calculate_grouped_metric,
+        )
         from services.intent_parser import (
             parse_ral_request,
+        )
+        from services.presentation_engine import (
+            present_result,
+        )
+        from services.trend_engine import (
+            calculate_trend,
         )
         from services.vocabulary.metrics import (
             calculate_metric,
         )
+
+        # =================================================
+        # 1. UNDERSTAND
+        # =================================================
 
         ral_request = parse_ral_request(
             user_message=user_message
@@ -346,12 +477,257 @@ def _try_generic_ral_execution(
         ):
             return None
 
+        # =================================================
+        # 2. FILTER
+        # =================================================
+
         data = load_auberry_workbook()
 
         filtered_sales = apply_ral_filters(
             data=data,
             ral_request=ral_request,
         )
+
+        print(
+            "Generic RAL filtered rows:",
+            len(
+                filtered_sales
+            ),
+        )
+
+        # Important business guardrail:
+        # no matching rows must not silently become "0".
+        if len(filtered_sales) == 0:
+            return _build_text_response(
+                "I could not find any matching sales records "
+                "for that combination, so I have not treated "
+                "the result as zero."
+            )
+
+        trend = ral_request.get(
+            "trend",
+            {},
+        )
+
+        grouping = ral_request.get(
+            "grouping",
+            {},
+        )
+
+        trend_enabled = bool(
+            isinstance(
+                trend,
+                dict,
+            )
+            and trend.get(
+                "enabled",
+                False,
+            )
+        )
+
+        grouping_enabled = bool(
+            isinstance(
+                grouping,
+                dict,
+            )
+            and grouping.get(
+                "enabled",
+                False,
+            )
+        )
+
+        # =================================================
+        # 3A. TREND EXECUTION
+        # =================================================
+
+        if trend_enabled:
+            analytics_result = (
+                calculate_trend(
+                    filtered_sales=filtered_sales,
+                    data=data,
+                    ral_request=ral_request,
+                )
+            )
+
+            presentation_result = (
+                present_result(
+                    result=analytics_result,
+                    result_type="trend",
+                    ral_request=ral_request,
+                )
+            )
+
+            print(
+                "Generic RAL trend result:",
+                {
+                    "metric": analytics_result.get(
+                        "metric"
+                    ),
+                    "grain": analytics_result.get(
+                        "grain"
+                    ),
+                    "point_count": analytics_result.get(
+                        "point_count"
+                    ),
+                    "grouping_enabled": (
+                        analytics_result.get(
+                            "grouping_enabled"
+                        )
+                    ),
+                },
+            )
+
+            if (
+                presentation_result.get(
+                    "mode"
+                )
+                == "text"
+            ):
+                return _build_text_response(
+                    presentation_result.get(
+                        "text",
+                        "",
+                    )
+                )
+
+            if (
+                presentation_result.get(
+                    "mode"
+                )
+                == "chart"
+            ):
+                chart_spec = (
+                    presentation_result[
+                        "chart_spec"
+                    ]
+                )
+
+                chart_file_name = (
+                    f"restaurantai_"
+                    f"{uuid4().hex}.png"
+                )
+
+                chart_path = render_chart(
+                    chart_spec=chart_spec,
+                    file_name=chart_file_name,
+                )
+
+                relative_media_url = (
+                    _publish_chart_for_whatsapp(
+                        chart_path
+                    )
+                )
+
+                return _build_media_response(
+                    body=_build_chart_caption(
+                        chart_spec
+                    ),
+                    relative_media_url=(
+                        relative_media_url
+                    ),
+                )
+
+            raise ValueError(
+                "Trend presentation returned an "
+                "unsupported mode."
+            )
+
+        # =================================================
+        # 3B. GROUPED EXECUTION
+        # =================================================
+
+        if grouping_enabled:
+            analytics_result = (
+                calculate_grouped_metric(
+                    filtered_sales=filtered_sales,
+                    data=data,
+                    ral_request=ral_request,
+                )
+            )
+
+            presentation_result = (
+                present_result(
+                    result=analytics_result,
+                    result_type="grouped",
+                    ral_request=ral_request,
+                )
+            )
+
+            print(
+                "Generic RAL grouped result:",
+                {
+                    "metric": analytics_result.get(
+                        "metric"
+                    ),
+                    "grouping_dimensions": (
+                        analytics_result.get(
+                            "grouping_dimensions"
+                        )
+                    ),
+                    "row_count": analytics_result.get(
+                        "row_count"
+                    ),
+                },
+            )
+
+            if (
+                presentation_result.get(
+                    "mode"
+                )
+                == "text"
+            ):
+                return _build_text_response(
+                    presentation_result.get(
+                        "text",
+                        "",
+                    )
+                )
+
+            if (
+                presentation_result.get(
+                    "mode"
+                )
+                == "chart"
+            ):
+                chart_spec = (
+                    presentation_result[
+                        "chart_spec"
+                    ]
+                )
+
+                chart_file_name = (
+                    f"restaurantai_"
+                    f"{uuid4().hex}.png"
+                )
+
+                chart_path = render_chart(
+                    chart_spec=chart_spec,
+                    file_name=chart_file_name,
+                )
+
+                relative_media_url = (
+                    _publish_chart_for_whatsapp(
+                        chart_path
+                    )
+                )
+
+                return _build_media_response(
+                    body=_build_chart_caption(
+                        chart_spec
+                    ),
+                    relative_media_url=(
+                        relative_media_url
+                    ),
+                )
+
+            raise ValueError(
+                "Grouped presentation returned an "
+                "unsupported mode."
+            )
+
+        # =================================================
+        # 3C. SINGLE METRIC EXECUTION
+        # =================================================
 
         metric_value = calculate_metric(
             metric_name=ral_request[
@@ -366,7 +742,7 @@ def _try_generic_ral_execution(
         )
 
         print(
-            "Generic RAL result:",
+            "Generic RAL metric result:",
             {
                 "metric": ral_request[
                     "metric"
@@ -398,7 +774,10 @@ def _try_generic_ral_execution(
             repr(error),
         )
 
-        return None
+        return _build_text_response(
+            "I understood the request, but the result "
+            "could not be generated safely. Please try again."
+        )
 
 
 # =========================================================

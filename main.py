@@ -603,3 +603,282 @@ def metrics_debug():
             if name.startswith("calculate")
         ],
     }
+
+@app.get("/ral-group-test")
+def ral_group_test(
+    message: str = (
+        "Store-wise sales last month"
+    ),
+):
+    """
+    Test the complete RestaurantAI grouped execution flow.
+
+    Natural Language
+        ↓
+    RAL
+        ↓
+    Deterministic Filters
+        ↓
+    Grouping Engine
+        ↓
+    Metric Calculation per Group
+    """
+    from services.filter_engine import (
+        apply_ral_filters,
+    )
+    from services.grouping_engine import (
+        calculate_grouped_metric,
+    )
+    from services.intent_parser import (
+        parse_ral_request,
+    )
+
+    data = load_auberry_workbook()
+
+    ral_request = parse_ral_request(
+        user_message=message
+    )
+
+    filtered_sales = apply_ral_filters(
+        data=data,
+        ral_request=ral_request,
+    )
+
+    grouped_result = calculate_grouped_metric(
+        filtered_sales=filtered_sales,
+        data=data,
+        ral_request=ral_request,
+    )
+
+    return {
+        "ral": ral_request,
+        "filtered_rows": len(
+            filtered_sales
+        ),
+        "grouped_result": (
+            grouped_result
+        ),
+    }
+
+@app.get("/ral-trend-test")
+def ral_trend_test(
+    message: str = (
+        "Daily sales trend this month"
+    ),
+):
+    """
+    Test the complete RestaurantAI trend execution flow.
+
+    Natural Language
+        ↓
+    RAL
+        ↓
+    Deterministic Filters
+        ↓
+    Trend Engine
+        ↓
+    Optional Grouping
+        ↓
+    Metric Engine
+    """
+    from services.filter_engine import (
+        apply_ral_filters,
+    )
+    from services.intent_parser import (
+        parse_ral_request,
+    )
+    from services.trend_engine import (
+        calculate_trend,
+    )
+
+    data = load_auberry_workbook()
+
+    ral_request = parse_ral_request(
+        user_message=message
+    )
+
+    filtered_sales = apply_ral_filters(
+        data=data,
+        ral_request=ral_request,
+    )
+
+    trend_result = calculate_trend(
+        filtered_sales=filtered_sales,
+        data=data,
+        ral_request=ral_request,
+    )
+
+    return {
+        "ral": ral_request,
+
+        "filtered_rows": len(
+            filtered_sales
+        ),
+
+        "trend_result": (
+            trend_result
+        ),
+    }
+
+@app.get("/ral-chart-test")
+def ral_chart_test(
+    message: str = (
+        "Plot daily sales trend this month"
+    ),
+):
+    """
+    Test RestaurantAI visual presentation pipeline.
+
+    Supports:
+
+        Trend -> Line Chart
+
+        Grouping -> Bar Chart
+
+        Trend + Grouping -> Chart
+    """
+    from services.chart_engine import (
+        render_chart,
+    )
+    from services.filter_engine import (
+        apply_ral_filters,
+    )
+    from services.grouping_engine import (
+        calculate_grouped_metric,
+    )
+    from services.intent_parser import (
+        parse_ral_request,
+    )
+    from services.presentation_engine import (
+        present_result,
+    )
+    from services.trend_engine import (
+        calculate_trend,
+    )
+
+    data = load_auberry_workbook()
+
+    ral_request = parse_ral_request(
+        user_message=message
+    )
+
+    filtered_sales = apply_ral_filters(
+        data=data,
+        ral_request=ral_request,
+    )
+
+    # =====================================================
+    # TREND
+    # =====================================================
+
+    if (
+        ral_request[
+            "trend"
+        ][
+            "enabled"
+        ]
+    ):
+
+        analytics_result = (
+            calculate_trend(
+                filtered_sales=filtered_sales,
+                data=data,
+                ral_request=ral_request,
+            )
+        )
+
+        result_type = "trend"
+
+    # =====================================================
+    # GROUPING
+    # =====================================================
+
+    elif (
+        ral_request[
+            "grouping"
+        ][
+            "enabled"
+        ]
+    ):
+
+        analytics_result = (
+            calculate_grouped_metric(
+                filtered_sales=filtered_sales,
+                data=data,
+                ral_request=ral_request,
+            )
+        )
+
+        result_type = "grouped"
+
+    else:
+
+        return {
+            "status": "unsupported",
+            "message": (
+                "This chart test currently requires "
+                "a grouped or trend request."
+            ),
+            "ral": ral_request,
+        }
+
+    presentation_result = (
+        present_result(
+            result=analytics_result,
+            result_type=result_type,
+            ral_request=ral_request,
+        )
+    )
+
+    if (
+        presentation_result[
+            "mode"
+        ]
+        != "chart"
+    ):
+
+        return {
+            "ral": ral_request,
+            "presentation": (
+                presentation_result
+            ),
+        }
+
+    chart_spec = (
+        presentation_result[
+            "chart_spec"
+        ]
+    )
+
+    chart_path = (
+        render_chart(
+            chart_spec=chart_spec,
+            file_name=(
+                "ral_chart_test.png"
+            ),
+        )
+    )
+
+    return {
+        "ral": ral_request,
+
+        "filtered_rows": len(
+            filtered_sales
+        ),
+
+        "result_type": (
+            result_type
+        ),
+
+        "analytics_result": (
+            analytics_result
+        ),
+
+        "chart_spec": (
+            chart_spec
+        ),
+
+        "chart_file": str(
+            chart_path
+        ),
+    }
