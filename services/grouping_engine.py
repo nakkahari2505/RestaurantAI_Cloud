@@ -540,9 +540,24 @@ def calculate_grouped_metric(
         group_df,
     ) in grouped_iterator:
         if len(group_columns) == 1:
-            group_values = (
-                group_key,
-            )
+            # pandas may return either a scalar or a one-item
+            # tuple when grouping with a one-column list.
+            # Normalize both forms so labels never appear as
+            # strings such as "('Zomato',)".
+            if (
+                isinstance(
+                    group_key,
+                    tuple,
+                )
+                and len(group_key) == 1
+            ):
+                group_values = (
+                    group_key[0],
+                )
+            else:
+                group_values = (
+                    group_key,
+                )
         else:
             group_values = tuple(
                 group_key

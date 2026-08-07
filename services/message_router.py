@@ -398,6 +398,169 @@ def _build_clarification_response(
     )
 
 
+def _try_selection_execution(
+    user_message: str,
+) -> dict | None:
+    """
+    Execute top-one / bottom-one "which / what / when"
+    questions without disturbing ordinary RAL execution.
+
+    Architecture:
+
+        Natural language
+            ↓
+        Existing RAL parser
+            ↓
+        Selection detector
+            ↓
+        Time default/selection preparation
+            ↓
+        Existing Filter Engine
+            ↓
+        Existing Grouping OR Trend Engine
+            ↓
+        Selection Engine picks max/min
+            ↓
+        WhatsApp text
+
+    This keeps all existing filter/business rules reusable.
+    """
+    try:
+        from services.filter_engine import (
+            apply_ral_filters,
+        )
+        from services.intent_parser import (
+            parse_ral_request,
+        )
+        from services.selection_engine import (
+            detect_selection_plan,
+            execute_selection,
+            format_selection_result,
+            prepare_selection_ral,
+        )
+
+        # First use the same language-understanding layer that
+        # already understands Store/Channel/Category/Item
+        # filters. Selection does not create another LLM parser.
+        ral_request = parse_ral_request(
+            user_message=user_message
+        )
+
+        plan = detect_selection_plan(
+            user_message=user_message,
+            ral_request=ral_request,
+        )
+
+        if plan is None:
+            return None
+
+        (
+            prepared_ral,
+            time_meta,
+        ) = prepare_selection_ral(
+            user_message=user_message,
+            ral_request=ral_request,
+        )
+
+        print(
+            "Selection plan:",
+            plan,
+        )
+
+        print(
+            "Selection RAL:",
+            prepared_ral,
+        )
+
+        # Preserve any genuine ambiguity that Selection did not
+        # deterministically resolve (for example product ambiguity).
+        clarification_response = (
+            _build_clarification_response(
+                prepared_ral
+            )
+        )
+
+        if clarification_response is not None:
+            return clarification_response
+
+        time_value = prepared_ral.get(
+            "time",
+            {},
+        )
+
+        if (
+            not isinstance(
+                time_value,
+                dict,
+            )
+            or not time_value.get(
+                "start_date"
+            )
+            or not time_value.get(
+                "end_date"
+            )
+        ):
+            return _build_text_response(
+                "I understood the ranking question, but the "
+                "time period is still unclear. Please specify "
+                "a date or period."
+            )
+
+        data = load_auberry_workbook()
+
+        filtered_sales = apply_ral_filters(
+            data=data,
+            ral_request=prepared_ral,
+        )
+
+        if len(filtered_sales) == 0:
+            return _build_text_response(
+                "I could not find any matching sales records "
+                "for that combination, so I have not treated "
+                "the result as zero."
+            )
+
+        selection_result = execute_selection(
+            filtered_sales=filtered_sales,
+            data=data,
+            ral_request=prepared_ral,
+            plan=plan,
+            time_meta=time_meta,
+        )
+
+        print(
+            "Selection result:",
+            selection_result,
+        )
+
+        return _build_text_response(
+            format_selection_result(
+                selection_result
+            )
+        )
+
+    except ValueError as error:
+        print(
+            "Selection validation/execution error:",
+            repr(error),
+        )
+
+        return _build_text_response(
+            str(error)
+        )
+
+    except Exception as error:
+        print(
+            "Selection execution error:",
+            repr(error),
+        )
+
+        return _build_text_response(
+            "I understood the ranking question, but the result "
+            "could not be generated safely. Please try again."
+        )
+
+
 def _try_generic_ral_execution(
     user_message: str,
 ) -> dict | None:
@@ -1067,6 +1230,19 @@ def route_message(
                 ]
             ),
         }
+
+    # =====================================================
+    # SELECTION / EXTREME CAPABILITY
+    # =====================================================
+
+    selection_response = (
+        _try_selection_execution(
+            user_message=normalized_message
+        )
+    )
+
+    if selection_response is not None:
+        return selection_response
 
     # =====================================================
     # GENERIC RAL EXECUTION
