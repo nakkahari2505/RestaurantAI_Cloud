@@ -4,8 +4,16 @@ import unicodedata
 import pandas as pd
 
 from services.builders.channel_builder import (
+    AGGREGATOR_OTHERS,
+    AGGREGATOR_SWIGGY,
+    AGGREGATOR_ZOMATO,
     CHANNEL_DELIVERY,
-    build_channel_dictionary,
+    CHANNEL_DINE_IN,
+    CHANNEL_OTHERS,
+    CHANNEL_TAKE_AWAY,
+    DERIVED_AGGREGATOR_COLUMN,
+    DERIVED_CHANNEL_COLUMN,
+    enrich_channel_dimensions,
 )
 from services.builders.product_builder import (
     build_product_dictionary,
@@ -23,7 +31,7 @@ SALES_SHEET_KEY: Final[str] = "sales"
 
 DATE_COLUMN: Final[str] = "Date"
 SOURCE_STORE_COLUMN: Final[str] = "Restaurant"
-CHANNEL_COLUMN: Final[str] = "Area"
+AREA_COLUMN: Final[str] = "Area"
 CATEGORY_COLUMN: Final[str] = "Category"
 ITEM_COLUMN: Final[str] = "Item Name"
 
@@ -167,7 +175,6 @@ def _validate_sales_columns(
     required_columns = {
         DATE_COLUMN,
         SOURCE_STORE_COLUMN,
-        CHANNEL_COLUMN,
         CATEGORY_COLUMN,
         ITEM_COLUMN,
     }
@@ -397,144 +404,35 @@ def _apply_store_filter(
 # =========================================================
 
 
-def _get_channel_raw_values(
-    channel_dictionary: dict[str, dict],
-    requested_channels: list[str],
-) -> set[str]:
-    """
-    Return all physical Area values belonging to the
-    requested canonical parent channels.
-    """
-    accepted_raw_values: set[str] = set()
-
-    unresolved_channels: list[str] = []
-
-    for requested_channel in requested_channels:
-        matching_definition = None
-
-        for (
-            canonical_name,
-            channel_definition,
-        ) in channel_dictionary.items():
-            if (
-                _normalize_text(
-                    canonical_name
-                )
-                == _normalize_text(
-                    requested_channel
-                )
-            ):
-                matching_definition = (
-                    channel_definition
-                )
-
-                break
-
-        if matching_definition is None:
-            unresolved_channels.append(
-                requested_channel
-            )
-
-            continue
-
-        raw_values = matching_definition.get(
-            "raw_values",
-            [],
-        )
-
-        for raw_value in raw_values:
-            accepted_raw_values.add(
-                _normalize_text(
-                    raw_value
-                )
-            )
-
-    if unresolved_channels:
-        raise ValueError(
-            "Unknown channel selection: "
-            + ", ".join(
-                unresolved_channels
-            )
-        )
-
-    return accepted_raw_values
+def _canonical_channel_names() -> set[str]:
+    return {
+        _normalize_text(
+            CHANNEL_DINE_IN
+        ),
+        _normalize_text(
+            CHANNEL_DELIVERY
+        ),
+        _normalize_text(
+            CHANNEL_TAKE_AWAY
+        ),
+        _normalize_text(
+            CHANNEL_OTHERS
+        ),
+    }
 
 
-def _get_aggregator_raw_values(
-    channel_dictionary: dict[str, dict],
-    requested_aggregators: list[str],
-) -> set[str]:
-    """
-    Return physical Area values belonging to the requested
-    Delivery aggregators.
-    """
-    accepted_raw_values: set[str] = set()
-
-    delivery_definition = (
-        channel_dictionary.get(
-            CHANNEL_DELIVERY,
-            {},
-        )
-    )
-
-    aggregator_dictionary = (
-        delivery_definition.get(
-            "aggregators",
-            {},
-        )
-    )
-
-    unresolved_aggregators: list[str] = []
-
-    for requested_aggregator in requested_aggregators:
-        matching_definition = None
-
-        for (
-            canonical_name,
-            aggregator_definition,
-        ) in aggregator_dictionary.items():
-            if (
-                _normalize_text(
-                    canonical_name
-                )
-                == _normalize_text(
-                    requested_aggregator
-                )
-            ):
-                matching_definition = (
-                    aggregator_definition
-                )
-
-                break
-
-        if matching_definition is None:
-            unresolved_aggregators.append(
-                requested_aggregator
-            )
-
-            continue
-
-        raw_values = matching_definition.get(
-            "raw_values",
-            [],
-        )
-
-        for raw_value in raw_values:
-            accepted_raw_values.add(
-                _normalize_text(
-                    raw_value
-                )
-            )
-
-    if unresolved_aggregators:
-        raise ValueError(
-            "Unknown aggregator selection: "
-            + ", ".join(
-                unresolved_aggregators
-            )
-        )
-
-    return accepted_raw_values
+def _canonical_aggregator_names() -> set[str]:
+    return {
+        _normalize_text(
+            AGGREGATOR_SWIGGY
+        ),
+        _normalize_text(
+            AGGREGATOR_ZOMATO
+        ),
+        _normalize_text(
+            AGGREGATOR_OTHERS
+        ),
+    }
 
 
 def _apply_channel_filter(
@@ -543,19 +441,18 @@ def _apply_channel_filter(
     ral_request: dict,
 ) -> pd.DataFrame:
     """
-    Apply parent-channel and aggregator filters.
+    Apply Auberry's canonical parent-channel and aggregator
+    filters using the SAME deterministic derivation used by
+    the Grouping Engine.
 
-    Examples:
+    Parent Channel source:
+        Order Type
 
-        channels = ["Delivery"]
-        aggregators = []
+    Delivery Aggregator source:
+        Area
 
-        means all Delivery business.
-
-        channels = ["Delivery"]
-        aggregators = ["Swiggy"]
-
-        means only Swiggy rows within Delivery.
+    This replaces the old assumption that Area itself was the
+    parent channel.
     """
     requested_channels = ral_request[
         "channels"
@@ -569,88 +466,109 @@ def _apply_channel_filter(
         not requested_channels
         and not requested_aggregators
     ):
-        return filtered_sales
-
-    channel_dictionary = (
-        build_channel_dictionary(
-            data=data
+        # Still enrich the dimensions so downstream grouping
+        # can use the same canonical Channel/Aggregator values.
+        return enrich_channel_dimensions(
+            filtered_sales
         )
-    )
 
-    normalized_area = _normalized_series(
-        filtered_sales[
-            CHANNEL_COLUMN
-        ]
+    enriched_sales = (
+        enrich_channel_dimensions(
+            filtered_sales
+        )
     )
 
     if requested_channels:
-        channel_raw_values = (
-            _get_channel_raw_values(
-                channel_dictionary=(
-                    channel_dictionary
-                ),
-                requested_channels=(
-                    requested_channels
-                ),
+        normalized_requested_channels = {
+            _normalize_text(
+                channel_name
             )
+            for channel_name in requested_channels
+        }
+
+        unknown_channels = (
+            normalized_requested_channels
+            - _canonical_channel_names()
         )
 
-        channel_mask = normalized_area.isin(
-            channel_raw_values
-        )
-
-        filtered_sales = filtered_sales.loc[
-            channel_mask
-        ].copy()
-
-    if requested_aggregators:
-        # A specific aggregator is always part of Delivery.
-        if (
-            requested_channels
-            and CHANNEL_DELIVERY.lower()
-            not in {
-                _normalize_text(
-                    channel_name
-                )
-                for channel_name
-                in requested_channels
-            }
-        ):
+        if unknown_channels:
             raise ValueError(
-                "An aggregator filter must belong to "
-                "the Delivery channel."
+                "Unknown channel selection: "
+                + ", ".join(
+                    sorted(
+                        unknown_channels
+                    )
+                )
             )
 
-        aggregator_raw_values = (
-            _get_aggregator_raw_values(
-                channel_dictionary=(
-                    channel_dictionary
-                ),
-                requested_aggregators=(
-                    requested_aggregators
-                ),
-            )
-        )
-
-        normalized_filtered_area = (
+        channel_mask = (
             _normalized_series(
-                filtered_sales[
-                    CHANNEL_COLUMN
+                enriched_sales[
+                    DERIVED_CHANNEL_COLUMN
                 ]
             )
+            .isin(
+                normalized_requested_channels
+            )
+        )
+
+        enriched_sales = (
+            enriched_sales.loc[
+                channel_mask
+            ].copy()
+        )
+
+    if requested_aggregators:
+        normalized_requested_aggregators = {
+            _normalize_text(
+                aggregator_name
+            )
+            for aggregator_name
+            in requested_aggregators
+        }
+
+        unknown_aggregators = (
+            normalized_requested_aggregators
+            - _canonical_aggregator_names()
+        )
+
+        if unknown_aggregators:
+            raise ValueError(
+                "Unknown aggregator selection: "
+                + ", ".join(
+                    sorted(
+                        unknown_aggregators
+                    )
+                )
+            )
+
+        # Aggregators are meaningful only inside Delivery.
+        delivery_mask = (
+            enriched_sales[
+                DERIVED_CHANNEL_COLUMN
+            ]
+            == CHANNEL_DELIVERY
         )
 
         aggregator_mask = (
-            normalized_filtered_area.isin(
-                aggregator_raw_values
+            _normalized_series(
+                enriched_sales[
+                    DERIVED_AGGREGATOR_COLUMN
+                ]
+            )
+            .isin(
+                normalized_requested_aggregators
             )
         )
 
-        filtered_sales = filtered_sales.loc[
-            aggregator_mask
-        ].copy()
+        enriched_sales = (
+            enriched_sales.loc[
+                delivery_mask
+                & aggregator_mask
+            ].copy()
+        )
 
-    return filtered_sales
+    return enriched_sales
 
 
 # =========================================================

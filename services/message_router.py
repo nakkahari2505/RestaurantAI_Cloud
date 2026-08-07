@@ -443,6 +443,9 @@ def _try_generic_ral_execution(
         from services.presentation_engine import (
             present_result,
         )
+        from services.pivot_table_image import (
+            generate_grouped_pivot_image,
+        )
         from services.trend_engine import (
             calculate_trend,
         )
@@ -645,14 +648,6 @@ def _try_generic_ral_execution(
                 )
             )
 
-            presentation_result = (
-                present_result(
-                    result=analytics_result,
-                    result_type="grouped",
-                    ral_request=ral_request,
-                )
-            )
-
             print(
                 "Generic RAL grouped result:",
                 {
@@ -670,12 +665,21 @@ def _try_generic_ral_execution(
                 },
             )
 
-            if (
+            presentation_result = (
+                present_result(
+                    result=analytics_result,
+                    result_type="grouped",
+                    ral_request=ral_request,
+                )
+            )
+
+            presentation_mode = (
                 presentation_result.get(
                     "mode"
                 )
-                == "text"
-            ):
+            )
+
+            if presentation_mode == "text":
                 return _build_text_response(
                     presentation_result.get(
                         "text",
@@ -683,12 +687,7 @@ def _try_generic_ral_execution(
                     )
                 )
 
-            if (
-                presentation_result.get(
-                    "mode"
-                )
-                == "chart"
-            ):
+            if presentation_mode == "chart":
                 chart_spec = (
                     presentation_result[
                         "chart_spec"
@@ -715,6 +714,67 @@ def _try_generic_ral_execution(
                     body=_build_chart_caption(
                         chart_spec
                     ),
+                    relative_media_url=(
+                        relative_media_url
+                    ),
+                )
+
+            if presentation_mode == "pivot_table":
+                pivot_spec = (
+                    presentation_result[
+                        "pivot_spec"
+                    ]
+                )
+
+                pivot_file_name = (
+                    f"restaurantai_pivot_"
+                    f"{uuid4().hex}.png"
+                )
+
+                pivot_result = (
+                    generate_grouped_pivot_image(
+                        pivot_spec=pivot_spec,
+                        file_name=(
+                            pivot_file_name
+                        ),
+                    )
+                )
+
+                relative_media_url = (
+                    _publish_chart_for_whatsapp(
+                        Path(
+                            pivot_result[
+                                "file_path"
+                            ]
+                        )
+                    )
+                )
+
+                title = str(
+                    pivot_spec.get(
+                        "title",
+                        "RestaurantAI Analysis",
+                    )
+                )
+
+                subtitle = str(
+                    pivot_spec.get(
+                        "subtitle",
+                        "",
+                    )
+                )
+
+                body = (
+                    f"📊 {title}"
+                )
+
+                if subtitle:
+                    body += (
+                        f"\n{subtitle}"
+                    )
+
+                return _build_media_response(
+                    body=body,
                     relative_media_url=(
                         relative_media_url
                     ),

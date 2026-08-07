@@ -1024,6 +1024,238 @@ def build_chart_spec(
     )
 
 
+
+# =========================================================
+# PIVOT TABLE SPECIFICATION
+# =========================================================
+
+
+def _distinct_group_value_count(
+    grouped_result: dict,
+    dimension: str,
+) -> int:
+    """
+    Count distinct values for one grouping dimension.
+
+    Used only to choose the most compact column dimension for
+    a three-dimensional pivot table.
+    """
+    values = {
+        str(
+            row.get(
+                "groups",
+                {},
+            ).get(
+                dimension,
+                "",
+            )
+        ).strip()
+        for row in grouped_result.get(
+            "rows",
+            [],
+        )
+    }
+
+    values.discard("")
+
+    return len(values)
+
+
+def _choose_pivot_axes(
+    grouped_result: dict,
+) -> tuple[list[str], str]:
+    """
+    Choose pivot rows and columns from grouping dimensions.
+
+    Business rules:
+
+    2 dimensions
+        -> 1 row dimension + 1 column dimension
+
+    3 dimensions
+        -> 2 row dimensions + 1 column dimension
+
+    If Store is present
+        -> Store MUST be the first row dimension.
+
+    For 3 dimensions, the column dimension is chosen from the
+    non-Store dimensions using the smallest distinct-value
+    count. This keeps the image narrower and more readable.
+    """
+    dimensions = list(
+        grouped_result.get(
+            "grouping_dimensions",
+            [],
+        )
+    )
+
+    if len(dimensions) not in {
+        2,
+        3,
+    }:
+        raise ValueError(
+            "Pivot presentation currently supports "
+            "two or three grouping dimensions."
+        )
+
+    if len(dimensions) == 2:
+        if "store" in dimensions:
+            row_dimensions = [
+                "store",
+            ]
+
+            column_dimension = next(
+                dimension
+                for dimension in dimensions
+                if dimension != "store"
+            )
+
+            return (
+                row_dimensions,
+                column_dimension,
+            )
+
+        return (
+            [
+                dimensions[0],
+            ],
+            dimensions[1],
+        )
+
+    # =====================================================
+    # THREE DIMENSIONS
+    # =====================================================
+
+    if "store" in dimensions:
+        non_store_dimensions = [
+            dimension
+            for dimension in dimensions
+            if dimension != "store"
+        ]
+
+        column_dimension = min(
+            non_store_dimensions,
+            key=lambda dimension: (
+                _distinct_group_value_count(
+                    grouped_result,
+                    dimension,
+                ),
+                dimensions.index(
+                    dimension
+                ),
+            ),
+        )
+
+        second_row_dimension = next(
+            dimension
+            for dimension in non_store_dimensions
+            if dimension != column_dimension
+        )
+
+        return (
+            [
+                "store",
+                second_row_dimension,
+            ],
+            column_dimension,
+        )
+
+    column_dimension = min(
+        dimensions,
+        key=lambda dimension: (
+            _distinct_group_value_count(
+                grouped_result,
+                dimension,
+            ),
+            dimensions.index(
+                dimension
+            ),
+        ),
+    )
+
+    row_dimensions = [
+        dimension
+        for dimension in dimensions
+        if dimension != column_dimension
+    ]
+
+    return (
+        row_dimensions,
+        column_dimension,
+    )
+
+
+def build_pivot_spec(
+    grouped_result: dict,
+    ral_request: dict,
+) -> dict:
+    """
+    Convert a 2D/3D grouped analytics result into a generic
+    pivot-table specification.
+
+    This function decides HOW the grouped result should be
+    arranged. It does not draw the image.
+    """
+    metric_name = str(
+        grouped_result.get(
+            "metric",
+            "",
+        )
+    )
+
+    row_dimensions, column_dimension = (
+        _choose_pivot_axes(
+            grouped_result
+        )
+    )
+
+    title_dimensions = (
+        row_dimensions
+        + [
+            column_dimension,
+        ]
+    )
+
+    title = (
+        f"{_metric_display_name(metric_name)} by "
+        + " + ".join(
+            _dimension_display_name(
+                dimension
+            )
+            for dimension in title_dimensions
+        )
+    )
+
+    return {
+        "metric": metric_name,
+        "title": title,
+        "subtitle": (
+            _build_chart_subtitle(
+                ral_request
+            )
+        ),
+        "row_dimensions": (
+            row_dimensions
+        ),
+        "column_dimension": (
+            column_dimension
+        ),
+        "rows": (
+            grouped_result.get(
+                "rows",
+                [],
+            )
+        ),
+        "show_grand_total": True,
+        "show_row_totals": True,
+        "show_subtotals": (
+            len(
+                row_dimensions
+            ) == 2
+        ),
+    }
+
+
 # =========================================================
 # PUBLIC PRESENTATION ROUTER
 # =========================================================
@@ -1037,26 +1269,30 @@ def present_result(
     """
     Common Presentation Layer entry point.
 
-    result_type:
+    Presentation policy:
 
-        grouped
-        trend
+        Explicit line/bar chart request
+            -> chart
 
-    Returns either:
+        Grouped result with 1 dimension
+            -> compact WhatsApp text
 
-        {
-            "mode": "text",
-            "text": "..."
-        }
+        Grouped result with 2 dimensions
+            -> pivot-table image
 
-    or:
+        Grouped result with 3 dimensions
+            -> hierarchical pivot-table image
+               (2 row dimensions + 1 column dimension)
 
-        {
-            "mode": "chart",
-            "chart_spec": {...}
-        }
+        If Store is present in a pivot
+            -> Store is always the first row dimension.
+
+        Trend without explicit chart
+            -> text (existing behaviour)
+
+    The router/delivery layer should only act on the returned
+    mode. It should not decide presentation rules itself.
     """
-
     presentation_type = (
         ral_request.get(
             "presentation",
@@ -1077,17 +1313,15 @@ def present_result(
     )
 
     # =====================================================
-    # CHART REQUEST
+    # EXPLICIT CHART REQUEST OVERRIDES AUTOMATIC PIVOT
     # =====================================================
 
     if presentation_type in {
         "bar_chart",
         "line_chart",
     }:
-
         return {
             "mode": "chart",
-
             "chart_spec": (
                 build_chart_spec(
                     result=result,
@@ -1102,18 +1336,53 @@ def present_result(
         }
 
     # =====================================================
-    # GROUPED TEXT
+    # GROUPED RESULT
     # =====================================================
 
     if normalized_result_type == "grouped":
+        grouping_dimensions = list(
+            result.get(
+                "grouping_dimensions",
+                [],
+            )
+        )
+
+        dimension_count = len(
+            grouping_dimensions
+        )
+
+        if dimension_count == 1:
+            return {
+                "mode": "text",
+                "text": (
+                    format_grouped_result_text(
+                        grouped_result=result
+                    )
+                ),
+            }
+
+        if dimension_count in {
+            2,
+            3,
+        }:
+            return {
+                "mode": "pivot_table",
+                "pivot_spec": (
+                    build_pivot_spec(
+                        grouped_result=result,
+                        ral_request=(
+                            ral_request
+                        ),
+                    )
+                ),
+            }
 
         return {
             "mode": "text",
-
             "text": (
-                format_grouped_result_text(
-                    grouped_result=result
-                )
+                "This request has too many grouping "
+                "dimensions for a clean management view. "
+                "Please narrow it to three dimensions or less."
             ),
         }
 
@@ -1122,7 +1391,6 @@ def present_result(
     # =====================================================
 
     if normalized_result_type == "trend":
-
         grouping_enabled = (
             result.get(
                 "grouping_enabled",
@@ -1131,15 +1399,12 @@ def present_result(
         )
 
         if grouping_enabled:
-
             presentation_text = (
                 format_grouped_trend_text(
                     trend_result=result
                 )
             )
-
         else:
-
             presentation_text = (
                 format_plain_trend_text(
                     trend_result=result
@@ -1154,3 +1419,4 @@ def present_result(
     raise ValueError(
         "Unsupported presentation result type."
     )
+
