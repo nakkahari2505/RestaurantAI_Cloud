@@ -649,5 +649,5 @@ def format_yesterday_morning_narrative(report: dict) -> str:
         f"*₹{mtd_sales}/-*, {mtd_movement} against last month same "
         f"period ({labels['lmtd_range']}), when sales were "
         f"*₹{lmtd_sales}/-*.\n\n"
-        f"Details report is below."
+        f"Detailed report is attached."
     )
