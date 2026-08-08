@@ -507,7 +507,7 @@ def generate_yesterday_morning_report_image(
         "footnote": load_font(FOOTNOTE_SIZE),
     }
 
-    title = "RestaurantAI Morning Performance Report"
+    title = "Auberry Daily Sales Report"
     title_width = get_text_width(
         draw=draw,
         text=title,
