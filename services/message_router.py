@@ -6,9 +6,6 @@ from uuid import uuid4
 from services.data_loader import (
     load_auberry_workbook,
 )
-from services.formatter import (
-    format_yesterday_sales_report,
-)
 from services.kpi_period_comparison import (
     get_kpi_period_comparison_report,
 )
@@ -21,8 +18,12 @@ from services.sales_for_a_period import (
 from services.sales_for_a_period_image import (
     generate_sales_for_a_period_image,
 )
-from services.yesterday_sales import (
-    get_yesterday_sales_report,
+from services.yesterday_morning_report import (
+    format_yesterday_morning_narrative,
+    get_yesterday_morning_report,
+)
+from services.yesterday_morning_report_image import (
+    generate_yesterday_morning_report_image,
 )
 
 
@@ -228,22 +229,271 @@ def _build_chart_caption(
 
 def _run_yesterday_sales() -> dict:
     """
-    Run the existing deterministic Yesterday Sales engine.
+    Run the management-style morning report for the fixed
+    "Yesterday sales" command.
 
-    Both the fixed command and compatible natural-language
-    requests may continue to use this stable capability.
+    Output:
+    - narrative management summary in WhatsApp text,
+    - professional three-section PNG report as media.
     """
-    data = load_auberry_workbook()
+    try:
+        data = load_auberry_workbook()
 
-    report = get_yesterday_sales_report(
-        data
-    )
-
-    return _build_text_response(
-        format_yesterday_sales_report(
-            report
+        report = (
+            get_yesterday_morning_report(
+                data
+            )
         )
-    )
+
+        data_status = report.get(
+            "data_status",
+            {},
+        )
+
+        if not data_status.get(
+            "yesterday_available",
+            False,
+        ):
+            requested_date = (
+                report[
+                    "labels"
+                ][
+                    "yesterday_full"
+                ]
+            )
+
+            latest_available = (
+                data_status.get(
+                    "latest_available_date"
+                )
+            )
+
+            latest_text = (
+                latest_available
+                if latest_available
+                else "No sales date available"
+            )
+
+            return _build_text_response(
+                "⚠️ No sales data is available for "
+                f"{requested_date}.\n"
+                f"Latest available data: {latest_text}."
+            )
+
+        image_result = (
+            generate_yesterday_morning_report_image(
+                report=report,
+                file_name=(
+                    f"yesterday_morning_"
+                    f"{uuid4().hex}.png"
+                ),
+            )
+        )
+
+        relative_media_url = (
+            _publish_chart_for_whatsapp(
+                Path(
+                    image_result[
+                        "file_path"
+                    ]
+                )
+            )
+        )
+
+        narrative = (
+            format_yesterday_morning_narrative(
+                report
+            )
+        )
+
+        return _build_media_response(
+            body=narrative,
+            relative_media_url=(
+                relative_media_url
+            ),
+        )
+
+    except ValueError as error:
+        print(
+            "Yesterday morning report validation error:",
+            repr(error),
+        )
+
+        return _build_text_response(
+            str(error)
+        )
+
+    except Exception as error:
+        print(
+            "Yesterday morning report error:",
+            repr(error),
+        )
+
+        return _build_text_response(
+            "The morning sales report could not be generated. "
+            "Please try again."
+        )
+
+
+def _try_yesterday_morning_report_semantic(
+    user_message: str,
+) -> dict | None:
+    """
+    Route natural-language equivalents of the overall
+    Yesterday Sales question to the management morning report.
+
+    This deliberately uses the existing RAL language-understanding
+    layer instead of maintaining a long list of phrases, spelling
+    variants or Hinglish expressions.
+
+    Only the plain OVERALL Sales + Yesterday request is intercepted.
+    Requests that add a store, channel, aggregator, category, item,
+    grouping, trend or comparison continue through the normal RAL
+    analytics pipeline.
+    """
+    try:
+        from services.intent_parser import (
+            parse_ral_request,
+        )
+
+        ral_request = parse_ral_request(
+            user_message=user_message
+        )
+
+        print(
+            "Yesterday semantic RAL:",
+            ral_request,
+        )
+
+        if not isinstance(ral_request, dict):
+            return None
+
+        if ral_request.get(
+            "needs_clarification",
+            False,
+        ):
+            return None
+
+        if ral_request.get(
+            "clarification_question"
+        ):
+            return None
+
+        metric_name = str(
+            ral_request.get(
+                "metric",
+                "",
+            )
+        ).strip().lower()
+
+        if metric_name != "sales":
+            return None
+
+        time_value = ral_request.get(
+            "time",
+            {},
+        )
+
+        if not isinstance(time_value, dict):
+            return None
+
+        time_type = str(
+            time_value.get(
+                "type",
+                "",
+            )
+        ).strip().lower()
+
+        # The parser's semantic time label is the primary signal.
+        # The explicit word check is only a safe fallback for a parser
+        # version that resolves the date but labels the type differently.
+        normalized_text = " ".join(
+            str(user_message).lower().split()
+        )
+
+        yesterday_semantic = (
+            time_type == "yesterday"
+            or "yesterday" in normalized_text
+            or "kal" in normalized_text
+        )
+
+        if not yesterday_semantic:
+            return None
+
+        # Morning Report is specifically the overall business view.
+        # Any analytical slice must remain with the generic RAL engine.
+        for filter_key in (
+            "stores",
+            "regions",
+            "channels",
+            "aggregators",
+            "categories",
+            "items",
+        ):
+            if ral_request.get(
+                filter_key,
+                [],
+            ):
+                return None
+
+        grouping = ral_request.get(
+            "grouping",
+            {},
+        )
+
+        if (
+            isinstance(grouping, dict)
+            and grouping.get(
+                "enabled",
+                False,
+            )
+        ):
+            return None
+
+        trend = ral_request.get(
+            "trend",
+            {},
+        )
+
+        if (
+            isinstance(trend, dict)
+            and trend.get(
+                "enabled",
+                False,
+            )
+        ):
+            return None
+
+        comparison = ral_request.get(
+            "comparison",
+            {},
+        )
+
+        if (
+            isinstance(comparison, dict)
+            and comparison.get(
+                "enabled",
+                False,
+            )
+        ):
+            return None
+
+        print(
+            "Routing to Yesterday Morning Report."
+        )
+
+        return _run_yesterday_sales()
+
+    except Exception as error:
+        # Semantic interception must never break the existing router.
+        # If understanding fails here, normal Selection/RAL handling
+        # below still gets its chance to execute the request.
+        print(
+            "Yesterday semantic routing error:",
+            repr(error),
+        )
+
+        return None
 
 
 # =========================================================
@@ -1047,6 +1297,23 @@ def route_message(
 
     if normalized_lower in yesterday_commands:
         return _run_yesterday_sales()
+
+    # Natural-language equivalents such as:
+    # - What were yesterday's sales?
+    # - How was business yesterday?
+    # - Kal ka dhandha?
+    # - typo / paraphrase variants understood by the RAL parser
+    # are semantically routed to the SAME morning report.
+    # Requests with dimensions/filters are intentionally not
+    # intercepted and continue to the analytical RAL pipeline.
+    yesterday_semantic_response = (
+        _try_yesterday_morning_report_semantic(
+            user_message=normalized_message
+        )
+    )
+
+    if yesterday_semantic_response is not None:
+        return yesterday_semantic_response
 
     # =====================================================
     # CAPABILITY 2: SALES FOR A PERIOD
