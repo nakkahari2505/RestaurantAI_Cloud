@@ -352,7 +352,7 @@ def _try_yesterday_morning_report_semantic(
     analytics pipeline.
     """
     try:
-        from services.intent_parser import (
+        from services.semantics.intent_parser import (
             parse_ral_request,
         )
 
@@ -679,7 +679,7 @@ def _try_selection_execution(
         from services.filter_engine import (
             apply_ral_filters,
         )
-        from services.intent_parser import (
+        from services.semantics.intent_parser import (
             parse_ral_request,
         )
         from services.selection_engine import (
@@ -850,7 +850,7 @@ def _try_generic_ral_execution(
         from services.grouping_engine import (
             calculate_grouped_metric,
         )
-        from services.intent_parser import (
+        from services.semantics.intent_parser import (
             parse_ral_request,
         )
         from services.presentation.presentation_engine import (
@@ -862,7 +862,7 @@ def _try_generic_ral_execution(
         from services.trend_engine import (
             calculate_trend,
         )
-        from services.vocabulary.metrics import (
+        from services.semantics.vocabulary.metrics import (
             calculate_metric,
         )
 

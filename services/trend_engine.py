@@ -5,7 +5,7 @@ import pandas as pd
 from services.grouping_engine import (
     calculate_grouped_metric,
 )
-from services.vocabulary.metrics import (
+from services.semantics.vocabulary.metrics import (
     METRIC_ADS,
     METRIC_ADT,
     METRIC_APT,

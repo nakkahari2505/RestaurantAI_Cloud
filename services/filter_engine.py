@@ -3,7 +3,7 @@ import unicodedata
 
 import pandas as pd
 
-from services.builders.channel_builder import (
+from services.semantics.builders.channel_builder import (
     AGGREGATOR_OTHERS,
     AGGREGATOR_SWIGGY,
     AGGREGATOR_ZOMATO,
@@ -15,10 +15,10 @@ from services.builders.channel_builder import (
     DERIVED_CHANNEL_COLUMN,
     enrich_channel_dimensions,
 )
-from services.builders.product_builder import (
+from services.semantics.builders.product_builder import (
     build_product_dictionary,
 )
-from services.builders.store_builder import (
+from services.semantics.builders.store_builder import (
     build_store_dictionary,
 )
 
@@ -206,7 +206,7 @@ def _apply_time_filter(
     Apply the inclusive RAL start-date and end-date filter.
 
     Relative periods such as last_month must already have
-    been resolved by services.vocabulary.time.resolve_ral_time.
+    been resolved by services.semantics.vocabulary.time.resolve_ral_time.
     """
     time_value = ral_request[
         "time"

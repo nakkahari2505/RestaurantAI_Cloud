@@ -5,18 +5,18 @@ import unicodedata
 
 import pandas as pd
 
-from services.builders.channel_builder import (
+from services.semantics.builders.channel_builder import (
     DERIVED_AGGREGATOR_COLUMN,
     DERIVED_CHANNEL_COLUMN,
     enrich_channel_dimensions,
 )
-from services.builders.product_builder import (
+from services.semantics.builders.product_builder import (
     build_product_dictionary,
 )
-from services.builders.store_builder import (
+from services.semantics.builders.store_builder import (
     build_store_dictionary,
 )
-from services.vocabulary.metrics import (
+from services.semantics.vocabulary.metrics import (
     calculate_metric,
 )
 

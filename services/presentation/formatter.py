@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from services.vocabulary.metrics import (
+from services.semantics.vocabulary.metrics import (
     METRIC_ADS,
     METRIC_ADT,
     METRIC_APT,
