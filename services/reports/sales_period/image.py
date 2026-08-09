@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from PIL import ImageDraw
 
-from services.image_engine import (
+from services.presentation.image_engine import (
     create_canvas,
     draw_right_aligned_text,
     draw_status_box,
@@ -14,7 +14,7 @@ from services.image_engine import (
 )
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 REPORTS_DIRECTORY = PROJECT_ROOT / "static" / "reports"
 
 

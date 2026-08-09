@@ -838,13 +838,13 @@ def _try_generic_ral_execution(
     function by route_message().
     """
     try:
-        from services.chart_engine import (
+        from services.presentation.chart_engine import (
             render_chart,
         )
         from services.filter_engine import (
             apply_ral_filters,
         )
-        from services.formatter import (
+        from services.presentation.formatter import (
             format_ral_metric_reply,
         )
         from services.grouping_engine import (
@@ -853,10 +853,10 @@ def _try_generic_ral_execution(
         from services.intent_parser import (
             parse_ral_request,
         )
-        from services.presentation_engine import (
+        from services.presentation.presentation_engine import (
             present_result,
         )
-        from services.pivot_table_image import (
+        from services.presentation.pivot_table_image import (
             generate_grouped_pivot_image,
         )
         from services.trend_engine import (

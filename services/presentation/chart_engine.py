@@ -3,7 +3,7 @@ from typing import Callable, Final
 
 from PIL import ImageDraw
 
-from services.image_engine import (
+from services.presentation.image_engine import (
     create_canvas,
     draw_centered_text,
     get_text_width,
@@ -17,7 +17,7 @@ from services.image_engine import (
 # =========================================================
 
 PROJECT_ROOT: Final[Path] = (
-    Path(__file__).resolve().parent.parent
+    Path(__file__).resolve().parents[2]
 )
 
 REPORTS_DIRECTORY: Final[Path] = (

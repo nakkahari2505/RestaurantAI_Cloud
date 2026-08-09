@@ -3,7 +3,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FONTS_DIRECTORY = PROJECT_ROOT / "assets" / "fonts"
 
 REGULAR_FONT_PATH = FONTS_DIRECTORY / "DejaVuSans.ttf"

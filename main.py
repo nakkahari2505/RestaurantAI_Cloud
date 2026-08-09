@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 from twilio.twiml.messaging_response import MessagingResponse
 
 from services.data_loader import load_auberry_workbook
-from services.formatter import format_yesterday_sales_report
+from services.presentation.formatter import format_yesterday_sales_report
 from services.reports.kpi_comparison.report import (
     get_kpi_period_comparison_report,
 )
@@ -737,7 +737,7 @@ def ral_chart_test(
 
         Trend + Grouping -> Chart
     """
-    from services.chart_engine import (
+    from services.presentation.chart_engine import (
         render_chart,
     )
     from services.filter_engine import (
@@ -749,7 +749,7 @@ def ral_chart_test(
     from services.intent_parser import (
         parse_ral_request,
     )
-    from services.presentation_engine import (
+    from services.presentation.presentation_engine import (
         present_result,
     )
     from services.trend_engine import (
