@@ -1,8 +1,10 @@
 from contextlib import asynccontextmanager
+import os
 
-from fastapi import FastAPI, Form, Request
+from fastapi import BackgroundTasks, FastAPI, Form, Request
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
+from twilio.rest import Client
 from twilio.twiml.messaging_response import MessagingResponse
 
 from services.core.data_loader import load_auberry_workbook
@@ -357,64 +359,129 @@ def ral_test(
 # =========================================================
 
 
+def _send_whatsapp_reply_in_background(
+    body: str,
+    from_number: str,
+    to_number: str,
+    base_url: str,
+) -> None:
+    """
+    Process the RestaurantAI request only after Twilio has already
+    received an immediate 200 response. Then send the completed
+    answer back through Twilio's REST API.
+
+    This prevents slow GPT/RAL requests from timing out the
+    inbound Twilio webhook.
+    """
+    try:
+        routed_response = route_message(
+            body
+        )
+
+        account_sid = os.getenv(
+            "TWILIO_ACCOUNT_SID"
+        )
+        auth_token = os.getenv(
+            "TWILIO_AUTH_TOKEN"
+        )
+
+        if not account_sid:
+            raise ValueError(
+                "TWILIO_ACCOUNT_SID environment variable is not configured."
+            )
+
+        if not auth_token:
+            raise ValueError(
+                "TWILIO_AUTH_TOKEN environment variable is not configured."
+            )
+
+        client = Client(
+            account_sid,
+            auth_token,
+        )
+
+        message_kwargs = {
+            "body": routed_response["body"],
+            "from_": to_number,
+            "to": from_number,
+        }
+
+        if (
+            routed_response["response_type"]
+            == "media"
+        ):
+            relative_media_url = (
+                routed_response[
+                    "relative_media_url"
+                ]
+            )
+
+            public_media_url = (
+                f"{base_url}"
+                f"{relative_media_url}"
+            )
+
+            message_kwargs[
+                "media_url"
+            ] = [
+                public_media_url
+            ]
+
+            print(
+                "Sending async WhatsApp media URL:",
+                public_media_url,
+            )
+
+        sent_message = client.messages.create(
+            **message_kwargs
+        )
+
+        print(
+            "Async WhatsApp reply sent:",
+            sent_message.sid,
+        )
+
+    except Exception as error:
+        print(
+            "Async WhatsApp reply error:",
+            repr(error),
+        )
+
+
 @app.post("/whatsapp")
 async def whatsapp(
     request: Request,
+    background_tasks: BackgroundTasks,
     Body: str = Form(...),
+    From: str = Form(...),
+    To: str = Form(...),
 ):
-    routed_response = route_message(
-        Body
+    """
+    Acknowledge Twilio immediately, then process RestaurantAI
+    in the background and send the final reply through Twilio's
+    REST API.
+
+    Twilio should never wait for GPT/RAL/analytics execution.
+    """
+    base_url = str(
+        request.base_url
+    ).rstrip("/")
+
+    background_tasks.add_task(
+        _send_whatsapp_reply_in_background,
+        Body,
+        From,
+        To,
+        base_url,
     )
 
     response = MessagingResponse()
-
-    message = response.message()
-
-    message.body(
-        routed_response["body"]
-    )
-
-    if (
-        routed_response["response_type"]
-        == "media"
-    ):
-        relative_media_url = (
-            routed_response[
-                "relative_media_url"
-            ]
-        )
-
-        base_url = str(
-            request.base_url
-        ).rstrip("/")
-
-        public_media_url = (
-            f"{base_url}"
-            f"{relative_media_url}"
-        )
-
-        print(
-            "Sending WhatsApp media URL:",
-            public_media_url,
-        )
-
-        print("=" * 80)
-        print("MEDIA URL")
-        print(public_media_url)
-        print("=" * 80)
-
-        message.media(
-            public_media_url
-        )
-
-        print(
-            "Media added to Twilio response."
-        )
 
     return PlainTextResponse(
         content=str(response),
         media_type="application/xml",
     )
+
 
 @app.get("/store-builder-test")
 def store_builder_test():
