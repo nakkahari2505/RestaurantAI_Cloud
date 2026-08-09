@@ -1,4 +1,29 @@
-venv/
-__pycache__/
-static/reports/*.png
+# Secrets / local environment
 .env
+.env.*
+!.env.example
+
+# Python runtime
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+
+# Generated RestaurantAI report/media output
+reports/*
+!reports/.gitkeep
+static/reports/*
+!static/reports/.gitkeep
+services/static/
+
+# Local project handoff/archive files
+*.zip
+
+# Local documentation / working notes
+All About RestaurantAI.docx
+RestaurantAI Architecture Journal.docx
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
