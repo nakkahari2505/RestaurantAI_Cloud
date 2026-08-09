@@ -157,6 +157,7 @@ def _publish_chart_for_whatsapp(
         .resolve()
         .parent
         .parent
+        .parent
     )
 
     static_reports_directory = (
