@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from twilio.twiml.messaging_response import MessagingResponse
 
-from services.data_loader import load_auberry_workbook
+from services.core.data_loader import load_auberry_workbook
 from services.presentation.formatter import format_yesterday_sales_report
 from services.reports.kpi_comparison.report import (
     get_kpi_period_comparison_report,
@@ -228,7 +228,7 @@ def llm_test():
     - report generation
     """
     try:
-        from services.llm_service import (
+        from services.core.llm_service import (
             llm_service,
         )
 
@@ -537,7 +537,7 @@ def ral_filter_test(
     print([x for x in dir(metrics) if x.startswith("calculate")])
     print("=" * 80)
 
-    from services.filter_engine import (
+    from services.analytics.filter_engine import (
         apply_ral_filters,
     )
     from services.semantics.intent_parser import (
@@ -623,10 +623,10 @@ def ral_group_test(
         ↓
     Metric Calculation per Group
     """
-    from services.filter_engine import (
+    from services.analytics.filter_engine import (
         apply_ral_filters,
     )
-    from services.grouping_engine import (
+    from services.analytics.grouping_engine import (
         calculate_grouped_metric,
     )
     from services.semantics.intent_parser import (
@@ -681,13 +681,13 @@ def ral_trend_test(
         ↓
     Metric Engine
     """
-    from services.filter_engine import (
+    from services.analytics.filter_engine import (
         apply_ral_filters,
     )
     from services.semantics.intent_parser import (
         parse_ral_request,
     )
-    from services.trend_engine import (
+    from services.analytics.trend_engine import (
         calculate_trend,
     )
 
@@ -740,10 +740,10 @@ def ral_chart_test(
     from services.presentation.chart_engine import (
         render_chart,
     )
-    from services.filter_engine import (
+    from services.analytics.filter_engine import (
         apply_ral_filters,
     )
-    from services.grouping_engine import (
+    from services.analytics.grouping_engine import (
         calculate_grouped_metric,
     )
     from services.semantics.intent_parser import (
@@ -752,7 +752,7 @@ def ral_chart_test(
     from services.presentation.presentation_engine import (
         present_result,
     )
-    from services.trend_engine import (
+    from services.analytics.trend_engine import (
         calculate_trend,
     )
 

@@ -13,10 +13,10 @@ from services.semantics.builders.store_builder import (
     build_store_dictionary,
     build_store_vocabulary_prompt,
 )
-from services.data_loader import (
+from services.core.data_loader import (
     load_auberry_workbook,
 )
-from services.llm_service import llm_service
+from services.core.llm_service import llm_service
 from services.semantics.ral_schema import (
     RAL_JSON_SCHEMA,
     create_empty_ral_request,

@@ -3,7 +3,7 @@ import shutil
 from pathlib import Path
 from uuid import uuid4
 
-from services.data_loader import (
+from services.core.data_loader import (
     load_auberry_workbook,
 )
 from services.reports.kpi_comparison.report import (
@@ -676,13 +676,13 @@ def _try_selection_execution(
     This keeps all existing filter/business rules reusable.
     """
     try:
-        from services.filter_engine import (
+        from services.analytics.filter_engine import (
             apply_ral_filters,
         )
         from services.semantics.intent_parser import (
             parse_ral_request,
         )
-        from services.selection_engine import (
+        from services.analytics.selection_engine import (
             detect_selection_plan,
             execute_selection,
             format_selection_result,
@@ -841,13 +841,13 @@ def _try_generic_ral_execution(
         from services.presentation.chart_engine import (
             render_chart,
         )
-        from services.filter_engine import (
+        from services.analytics.filter_engine import (
             apply_ral_filters,
         )
         from services.presentation.formatter import (
             format_ral_metric_reply,
         )
-        from services.grouping_engine import (
+        from services.analytics.grouping_engine import (
             calculate_grouped_metric,
         )
         from services.semantics.intent_parser import (
@@ -859,7 +859,7 @@ def _try_generic_ral_execution(
         from services.presentation.pivot_table_image import (
             generate_grouped_pivot_image,
         )
-        from services.trend_engine import (
+        from services.analytics.trend_engine import (
             calculate_trend,
         )
         from services.semantics.vocabulary.metrics import (

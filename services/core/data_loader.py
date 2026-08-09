@@ -4,7 +4,7 @@ from pathlib import Path
 import pandas as pd
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 AUBERRY_FILE = PROJECT_ROOT / "data" / "auberry" / "sales.xlsx"
 
 

@@ -2,7 +2,7 @@ from typing import Final
 
 import pandas as pd
 
-from services.grouping_engine import (
+from services.analytics.grouping_engine import (
     calculate_grouped_metric,
 )
 from services.semantics.vocabulary.metrics import (

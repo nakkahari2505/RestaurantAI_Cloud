@@ -6,10 +6,10 @@ import re
 from typing import Any, Final
 from zoneinfo import ZoneInfo
 
-from services.grouping_engine import (
+from services.analytics.grouping_engine import (
     calculate_grouped_metric,
 )
-from services.trend_engine import (
+from services.analytics.trend_engine import (
     calculate_trend,
 )
 
