@@ -6,23 +6,23 @@ from uuid import uuid4
 from services.data_loader import (
     load_auberry_workbook,
 )
-from services.kpi_period_comparison import (
+from services.reports.kpi_comparison.report import (
     get_kpi_period_comparison_report,
 )
-from services.kpi_period_comparison_image import (
+from services.reports.kpi_comparison.image import (
     generate_kpi_period_comparison_image,
 )
-from services.sales_for_a_period import (
+from services.reports.sales_period.report import (
     get_store_performance_report,
 )
-from services.sales_for_a_period_image import (
+from services.reports.sales_period.image import (
     generate_sales_for_a_period_image,
 )
-from services.yesterday_morning_report import (
+from services.reports.yesterday.morning_report import (
     format_yesterday_morning_narrative,
     get_yesterday_morning_report,
 )
-from services.yesterday_morning_report_image import (
+from services.reports.yesterday.morning_report_image import (
     generate_yesterday_morning_report_image,
 )
 

@@ -7,21 +7,21 @@ from twilio.twiml.messaging_response import MessagingResponse
 
 from services.data_loader import load_auberry_workbook
 from services.formatter import format_yesterday_sales_report
-from services.kpi_period_comparison import (
+from services.reports.kpi_comparison.report import (
     get_kpi_period_comparison_report,
 )
-from services.kpi_period_comparison_image import (
+from services.reports.kpi_comparison.image import (
     generate_kpi_period_comparison_image,
 )
 from services.message_router import route_message
 import services.vocabulary.metrics as metrics
-from services.sales_for_a_period import (
+from services.reports.sales_period.report import (
     get_store_performance_report,
 )
-from services.sales_for_a_period_image import (
+from services.reports.sales_period.image import (
     generate_sales_for_a_period_image,
 )
-from services.yesterday_sales import (
+from services.reports.yesterday.legacy_report import (
     get_yesterday_sales_report,
 )
 from services.builders.store_builder import (
