@@ -13,7 +13,7 @@ from services.reports.kpi_comparison.report import (
 from services.reports.kpi_comparison.image import (
     generate_kpi_period_comparison_image,
 )
-from services.message_router import route_message
+from services.routing.message_router import route_message
 import services.semantics.vocabulary.metrics as metrics
 from services.reports.sales_period.report import (
     get_store_performance_report,
