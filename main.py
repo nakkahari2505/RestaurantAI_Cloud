@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 import os
 
-from fastapi import BackgroundTasks, FastAPI, Form, Request
+from fastapi import BackgroundTasks, FastAPI, Form, Header, HTTPException, Request
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from twilio.rest import Client
@@ -359,6 +359,95 @@ def ral_test(
 # =========================================================
 
 
+def _get_twilio_client() -> Client:
+    """
+    Build the Twilio REST client from environment variables.
+    """
+    account_sid = os.getenv(
+        "TWILIO_ACCOUNT_SID"
+    )
+    auth_token = os.getenv(
+        "TWILIO_AUTH_TOKEN"
+    )
+
+    if not account_sid:
+        raise ValueError(
+            "TWILIO_ACCOUNT_SID environment variable is not configured."
+        )
+
+    if not auth_token:
+        raise ValueError(
+            "TWILIO_AUTH_TOKEN environment variable is not configured."
+        )
+
+    return Client(
+        account_sid,
+        auth_token,
+    )
+
+
+def _send_routed_response_via_twilio(
+    routed_response: dict,
+    to_number: str,
+    from_number: str,
+    base_url: str,
+) -> str:
+    """
+    Send one already-generated RestaurantAI response through
+    Twilio's REST API.
+
+    This helper is reused by:
+    - normal inbound WhatsApp requests after async processing,
+    - scheduled outbound reports.
+    """
+    client = _get_twilio_client()
+
+    message_kwargs = {
+        "body": routed_response["body"],
+        "from_": from_number,
+        "to": to_number,
+    }
+
+    if (
+        routed_response["response_type"]
+        == "media"
+    ):
+        relative_media_url = (
+            routed_response[
+                "relative_media_url"
+            ]
+        )
+
+        public_media_url = (
+            f"{base_url.rstrip('/')}"
+            f"{relative_media_url}"
+        )
+
+        message_kwargs[
+            "media_url"
+        ] = [
+            public_media_url
+        ]
+
+        print(
+            "Sending WhatsApp media URL:",
+            public_media_url,
+        )
+
+    sent_message = client.messages.create(
+        **message_kwargs
+    )
+
+    print(
+        "WhatsApp reply sent:",
+        sent_message.sid,
+    )
+
+    return str(
+        sent_message.sid
+    )
+
+
 def _send_whatsapp_reply_in_background(
     body: str,
     from_number: str,
@@ -366,79 +455,24 @@ def _send_whatsapp_reply_in_background(
     base_url: str,
 ) -> None:
     """
-    Process the RestaurantAI request only after Twilio has already
-    received an immediate 200 response. Then send the completed
-    answer back through Twilio's REST API.
+    Process a user request only after Twilio has already received
+    an immediate 200 response, then send the completed answer back
+    through Twilio's REST API.
 
-    This prevents slow GPT/RAL requests from timing out the
-    inbound Twilio webhook.
+    Twilio inbound mapping:
+    - from_number = user's WhatsApp number
+    - to_number   = RestaurantAI/Twilio WhatsApp sender
     """
     try:
         routed_response = route_message(
             body
         )
 
-        account_sid = os.getenv(
-            "TWILIO_ACCOUNT_SID"
-        )
-        auth_token = os.getenv(
-            "TWILIO_AUTH_TOKEN"
-        )
-
-        if not account_sid:
-            raise ValueError(
-                "TWILIO_ACCOUNT_SID environment variable is not configured."
-            )
-
-        if not auth_token:
-            raise ValueError(
-                "TWILIO_AUTH_TOKEN environment variable is not configured."
-            )
-
-        client = Client(
-            account_sid,
-            auth_token,
-        )
-
-        message_kwargs = {
-            "body": routed_response["body"],
-            "from_": to_number,
-            "to": from_number,
-        }
-
-        if (
-            routed_response["response_type"]
-            == "media"
-        ):
-            relative_media_url = (
-                routed_response[
-                    "relative_media_url"
-                ]
-            )
-
-            public_media_url = (
-                f"{base_url}"
-                f"{relative_media_url}"
-            )
-
-            message_kwargs[
-                "media_url"
-            ] = [
-                public_media_url
-            ]
-
-            print(
-                "Sending async WhatsApp media URL:",
-                public_media_url,
-            )
-
-        sent_message = client.messages.create(
-            **message_kwargs
-        )
-
-        print(
-            "Async WhatsApp reply sent:",
-            sent_message.sid,
+        _send_routed_response_via_twilio(
+            routed_response=routed_response,
+            to_number=from_number,
+            from_number=to_number,
+            base_url=base_url,
         )
 
     except Exception as error:
@@ -481,6 +515,119 @@ async def whatsapp(
         content=str(response),
         media_type="application/xml",
     )
+
+
+# =========================================================
+# SCHEDULED MORNING REPORT
+# =========================================================
+
+
+@app.post("/internal/send-yesterday-report")
+def send_scheduled_yesterday_report(
+    request: Request,
+    x_scheduler_token: str | None = Header(
+        default=None,
+        alias="X-Scheduler-Token",
+    ),
+):
+    """
+    Generate and send the existing Yesterday Sales management
+    report without requiring an inbound WhatsApp message.
+
+    This endpoint is intended to be called only by the Railway
+    cron trigger. It is protected by SCHEDULER_SECRET.
+
+    The report itself is NOT rebuilt here. It reuses the exact
+    same stable "Yesterday sales" routing capability used by
+    WhatsApp users.
+    """
+    expected_token = os.getenv(
+        "SCHEDULER_SECRET"
+    )
+
+    if not expected_token:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "SCHEDULER_SECRET environment variable "
+                "is not configured."
+            ),
+        )
+
+    if (
+        not x_scheduler_token
+        or x_scheduler_token != expected_token
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid scheduler token.",
+        )
+
+    recipient = os.getenv(
+        "MORNING_REPORT_TO"
+    )
+    sender = os.getenv(
+        "TWILIO_WHATSAPP_FROM"
+    )
+
+    if not recipient:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "MORNING_REPORT_TO environment variable "
+                "is not configured."
+            ),
+        )
+
+    if not sender:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "TWILIO_WHATSAPP_FROM environment variable "
+                "is not configured."
+            ),
+        )
+
+    public_base_url = (
+        os.getenv(
+            "PUBLIC_BASE_URL"
+        )
+        or str(
+            request.base_url
+        ).rstrip("/")
+    )
+
+    try:
+        routed_response = route_message(
+            "Yesterday sales"
+        )
+
+        message_sid = (
+            _send_routed_response_via_twilio(
+                routed_response=routed_response,
+                to_number=recipient,
+                from_number=sender,
+                base_url=public_base_url,
+            )
+        )
+
+        return {
+            "status": "sent",
+            "report": "Yesterday sales",
+            "message_sid": message_sid,
+            "recipient": recipient,
+        }
+
+    except Exception as error:
+        print(
+            "Scheduled Yesterday Sales error:",
+            repr(error),
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(error),
+        ) from error
 
 
 @app.get("/store-builder-test")
