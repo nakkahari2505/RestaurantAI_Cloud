@@ -1255,6 +1255,30 @@ def _try_generic_ral_execution(
 
 
 # =========================================================
+# MANAGEMENT INTELLIGENCE
+# =========================================================
+
+
+def _run_management_intelligence() -> dict:
+    """
+    Build the current RestaurantAI management-intelligence message
+    and return it through the standard WhatsApp text-response shape.
+
+    The import stays local deliberately so unfinished/local
+    intelligence work can never prevent the normal router from loading.
+    """
+    from services.intelligence.intelligence_orchestrator import (
+        build_management_message,
+    )
+
+    message = build_management_message()
+
+    return _build_text_response(
+        message
+    )
+
+
+# =========================================================
 # MAIN WHATSAPP ROUTER
 # =========================================================
 
@@ -1284,6 +1308,21 @@ def route_message(
         return _build_text_response(
             "Please send a restaurant business question."
         )
+
+    management_intelligence_commands = {
+        "management intelligence",
+    }
+
+    # =====================================================
+    # MANAGEMENT INTELLIGENCE
+    # FIXED COMMAND - FIRST OWNER-FACING BI MESSAGE
+    # =====================================================
+
+    if (
+        normalized_lower
+        in management_intelligence_commands
+    ):
+        return _run_management_intelligence()
 
     yesterday_commands = {
         "yesterday sales",
