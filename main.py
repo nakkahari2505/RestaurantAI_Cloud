@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from datetime import date
 import os
 
 from fastapi import BackgroundTasks, FastAPI, Form, Header, HTTPException, Request
@@ -8,6 +9,30 @@ from twilio.rest import Client
 from twilio.twiml.messaging_response import MessagingResponse
 
 from services.core.data_loader import load_auberry_workbook
+from services.intelligence.company_performance_scanner import (
+    scan_company_performance,
+)
+from services.intelligence.company_observer import (
+    observe_company_performance,
+)
+from services.intelligence.store_performance_scanner import (
+    scan_store_performance,
+)
+from services.intelligence.store_observer import (
+    observe_store_performance,
+)
+from services.intelligence.store_trend_scanner import (
+    scan_store_weekly_trends,
+)
+from services.intelligence.store_trend_observer import (
+    observe_store_weekly_trends,
+)
+from services.intelligence.product_zero_sales import (
+    detect_product_zero_sales,
+)
+from services.intelligence.performance_drilldown import (
+    drilldown_performance,
+)
 from services.presentation.formatter import format_yesterday_sales_report
 from services.reports.kpi_comparison.report import (
     get_kpi_period_comparison_report,
@@ -88,6 +113,212 @@ def test_data():
             data["item_category"]
         ),
     }
+
+
+# =========================================================
+# INTELLIGENCE V1 - COMPANY PERFORMANCE SCANNER TEST
+# =========================================================
+
+
+@app.get("/intelligence/company-performance-test")
+def company_performance_test():
+    """
+    Temporary development endpoint for Intelligence V1.
+
+    Runs the isolated company scanner against the active Auberry
+    workbook and returns structured Daily / MTD / YTD evidence.
+
+    No GPT narration.
+    No WhatsApp delivery.
+    No alert thresholds.
+    """
+    data = load_auberry_workbook()
+
+    return scan_company_performance(
+        data=data
+    )
+
+
+@app.get("/intelligence/company-observation-test")
+def company_observation_test():
+    """
+    Temporary development endpoint for Intelligence V1.
+
+    Pipeline:
+        Auberry workbook
+        -> Company Performance Scanner
+        -> Company Observer
+        -> deterministic Daily / MTD / YTD observations
+
+    No GPT.
+    No WhatsApp.
+    No store drill-down yet.
+    """
+    data = load_auberry_workbook()
+
+    company_scan = scan_company_performance(
+        data=data
+    )
+
+    return observe_company_performance(
+        company_scan=company_scan
+    )
+
+
+@app.get("/intelligence/store-performance-test")
+def store_performance_test():
+    """
+    Temporary development endpoint for Intelligence V1.
+
+    Runs the Store Performance Scanner using the same
+    Daily / MTD / YTD periods and KPI definitions as the
+    validated company scanner.
+
+    Returns evidence only:
+    - store KPIs,
+    - store percentage movements,
+    - gap versus company movement.
+
+    No anomaly judgement.
+    No GPT.
+    No WhatsApp.
+    """
+    data = load_auberry_workbook()
+
+    return scan_store_performance(
+        data=data
+    )
+
+
+@app.get("/intelligence/store-observation-test")
+def store_observation_test():
+    """
+    Temporary development endpoint for Intelligence V1.
+
+    Pipeline:
+        Auberry workbook
+        -> Store Performance Scanner
+        -> Store Observer
+        -> peer-divergence queue
+
+    No 4-week persistence yet.
+    No channel/category/item drill-down yet.
+    No GPT.
+    No WhatsApp.
+    """
+    data = load_auberry_workbook()
+
+    store_scan = scan_store_performance(
+        data=data
+    )
+
+    return observe_store_performance(
+        store_scan=store_scan
+    )
+
+
+@app.get("/intelligence/store-weekly-trend-test")
+def store_weekly_trend_test():
+    """
+    Temporary development endpoint for Intelligence V1.
+
+    Runs the latest 5 fully completed Monday-Sunday weeks
+    for the company and every store.
+
+    Returns evidence only:
+    - Sales / Transactions / ADS / ADT / APT by week
+    - 4 week-over-week movements
+    - store-vs-company percentage-point gaps
+
+    No persistent-decline judgement yet.
+    No GPT.
+    No WhatsApp.
+    """
+    data = load_auberry_workbook()
+
+    return scan_store_weekly_trends(
+        data=data
+    )
+
+
+@app.get("/intelligence/store-weekly-observation-test")
+def store_weekly_observation_test():
+    """
+    Temporary development endpoint for Intelligence V1.
+
+    Pipeline:
+        Auberry workbook
+        -> Store Weekly Trend Scanner
+        -> Store Trend Observer
+        -> persistent deterioration queue
+
+    No channel/category/item drill-down yet.
+    No GPT.
+    No WhatsApp.
+    """
+    data = load_auberry_workbook()
+
+    trend_scan = scan_store_weekly_trends(
+        data=data
+    )
+
+    return observe_store_weekly_trends(
+        trend_scan=trend_scan
+    )
+
+
+@app.get("/intelligence/product-zero-sales-test")
+def product_zero_sales_test():
+    """
+    Temporary development endpoint for Intelligence V1.
+
+    Detects normally-selling Store x Item combinations that
+    suddenly recorded zero sales on the latest 3 consecutive
+    store-operating days.
+
+    No GPT.
+    No WhatsApp.
+    """
+    data = load_auberry_workbook()
+
+    return detect_product_zero_sales(
+        data=data
+    )
+
+
+@app.get("/intelligence/performance-drilldown-test")
+def performance_drilldown_test(
+    current_start: date,
+    current_end: date,
+    comparison_start: date,
+    comparison_end: date,
+    store: str | None = None,
+):
+    """
+    Temporary development endpoint for Intelligence V1 WHY engine.
+
+    Example use:
+        Store-level APT/transaction investigation using explicit
+        current and comparison periods.
+
+    Returns deterministic evidence only:
+    - Sales / Txns / ADS / ADT / APT decomposition
+    - primary driver
+    - Channel / Category / Item contributor ranking
+
+    No GPT.
+    No WhatsApp.
+    """
+    data = load_auberry_workbook()
+
+    return drilldown_performance(
+        data=data,
+        current_start=current_start,
+        current_end=current_end,
+        comparison_start=comparison_start,
+        comparison_end=comparison_end,
+        store=store,
+    )
 
 
 # =========================================================
@@ -537,10 +768,13 @@ def send_scheduled_yesterday_report(
     This endpoint is intended to be called only by the Railway
     cron trigger. It is protected by SCHEDULER_SECRET.
 
-    The report itself is NOT rebuilt here. It reuses the exact
-    same stable "Yesterday sales" routing capability used by
-    WhatsApp users.
+    MORNING_REPORT_TO may contain one or multiple WhatsApp
+    numbers separated by commas.
+
+    Each recipient is processed independently. A failure for
+    one recipient does not prevent delivery to the others.
     """
+
     expected_token = os.getenv(
         "SCHEDULER_SECRET"
     )
@@ -563,14 +797,15 @@ def send_scheduled_yesterday_report(
             detail="Invalid scheduler token.",
         )
 
-    recipient = os.getenv(
+    recipients_raw = os.getenv(
         "MORNING_REPORT_TO"
     )
+
     sender = os.getenv(
         "TWILIO_WHATSAPP_FROM"
     )
 
-    if not recipient:
+    if not recipients_raw:
         raise HTTPException(
             status_code=503,
             detail=(
@@ -588,6 +823,25 @@ def send_scheduled_yesterday_report(
             ),
         )
 
+    # -----------------------------------------------------
+    # MULTIPLE RECIPIENTS
+    # -----------------------------------------------------
+
+    recipients = [
+        number.strip()
+        for number in recipients_raw.split(",")
+        if number.strip()
+    ]
+
+    if not recipients:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "MORNING_REPORT_TO does not contain "
+                "any valid recipients."
+            ),
+        )
+
     public_base_url = (
         os.getenv(
             "PUBLIC_BASE_URL"
@@ -597,49 +851,83 @@ def send_scheduled_yesterday_report(
         ).rstrip("/")
     )
 
-    try:
-        routed_response = route_message(
-            "Yesterday sales"
-        )
-
-        message_sid = (
-            _send_routed_response_via_twilio(
-                routed_response=routed_response,
-                to_number=recipient,
-                from_number=sender,
-                base_url=public_base_url,
-            )
-        )
-
-        return {
-            "status": "sent",
-            "report": "Yesterday sales",
-            "message_sid": message_sid,
-            "recipient": recipient,
-        }
-
-    except Exception as error:
-        print(
-            "Scheduled Yesterday Sales error:",
-            repr(error),
-        )
-
-        raise HTTPException(
-            status_code=500,
-            detail=str(error),
-        ) from error
-
-
-@app.get("/store-builder-test")
-def store_builder_test():
-
-    data = load_auberry_workbook()
-
-    store_dictionary = (
-        build_store_dictionary(data)
+    # Generate the report only once.
+    routed_response = route_message(
+        "Yesterday sales"
     )
 
-    return store_dictionary
+    successful = []
+    failed = []
+
+    # -----------------------------------------------------
+    # SEND INDEPENDENTLY TO EACH RECIPIENT
+    # -----------------------------------------------------
+
+    for recipient in recipients:
+
+        try:
+            message_sid = (
+                _send_routed_response_via_twilio(
+                    routed_response=routed_response,
+                    to_number=recipient,
+                    from_number=sender,
+                    base_url=public_base_url,
+                )
+            )
+
+            successful.append(
+                {
+                    "recipient": recipient,
+                    "message_sid": message_sid,
+                }
+            )
+
+            print(
+                "Scheduled Yesterday Sales sent:",
+                recipient,
+                message_sid,
+            )
+
+        except Exception as error:
+
+            failed.append(
+                {
+                    "recipient": recipient,
+                    "error": str(error),
+                }
+            )
+
+            print(
+                "Scheduled Yesterday Sales failed:",
+                recipient,
+                repr(error),
+            )
+
+            # IMPORTANT:
+            # Do not raise the error here.
+            # Continue sending to the remaining recipients.
+
+    # -----------------------------------------------------
+    # RESULT
+    # -----------------------------------------------------
+
+    return {
+        "status": (
+            "sent"
+            if not failed
+            else (
+                "partial_success"
+                if successful
+                else "failed"
+            )
+        ),
+        "report": "Yesterday sales",
+        "recipient_count": len(recipients),
+        "successful_count": len(successful),
+        "failed_count": len(failed),
+        "successful": successful,
+        "failed": failed,
+    }
 
 @app.get("/channel-builder-test")
 def channel_builder_test():
