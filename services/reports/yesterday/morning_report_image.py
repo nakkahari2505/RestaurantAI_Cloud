@@ -40,6 +40,11 @@ HEADER_SIZE: Final[int] = 23
 BODY_SIZE: Final[int] = 23
 TOTAL_SIZE: Final[int] = 24
 FOOTNOTE_SIZE: Final[int] = 19
+NARRATIVE_SIZE: Final[int] = 21
+NARRATIVE_LINE_GAP: Final[int] = 10
+NARRATIVE_PADDING: Final[int] = 26
+NARRATIVE_HEADING_HEIGHT: Final[int] = 44
+NARRATIVE_PANEL_GAP: Final[int] = 10
 
 LEFT_MARGIN: Final[int] = 42
 RIGHT_MARGIN: Final[int] = 42
@@ -454,9 +459,129 @@ def _draw_section(
     return row_top + SECTION_GAP
 
 
+
+def _wrap_text_by_width(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    font,
+    max_width: int,
+) -> list[str]:
+    """Wrap text to a pixel width while preserving explicit paragraph breaks."""
+    cleaned = str(text or "").replace("*", "").strip()
+    if not cleaned:
+        return []
+
+    wrapped_lines: list[str] = []
+
+    for raw_line in cleaned.splitlines():
+        line = raw_line.strip()
+        if not line:
+            wrapped_lines.append("")
+            continue
+
+        words = line.split()
+        current = ""
+
+        for word in words:
+            candidate = word if not current else f"{current} {word}"
+            if get_text_width(draw=draw, text=candidate, font=font) <= max_width:
+                current = candidate
+            else:
+                if current:
+                    wrapped_lines.append(current)
+                current = word
+
+        if current:
+            wrapped_lines.append(current)
+
+    return wrapped_lines
+
+
+def _narrative_panel_height(lines: list[str], font) -> int:
+    if not lines:
+        return 0
+
+    # DejaVu font metrics are stable across local and Railway environments.
+    bbox = font.getbbox("Ag")
+    line_height = (bbox[3] - bbox[1]) + NARRATIVE_LINE_GAP
+    blank_height = max(12, line_height // 2)
+
+    content_height = sum(
+        blank_height if line == "" else line_height
+        for line in lines
+    )
+
+    return (
+        NARRATIVE_PANEL_GAP
+        + NARRATIVE_PADDING
+        + NARRATIVE_HEADING_HEIGHT
+        + content_height
+        + NARRATIVE_PADDING
+    )
+
+
+def _draw_narrative_panel(
+    draw: ImageDraw.ImageDraw,
+    top: int,
+    canvas_width: int,
+    lines: list[str],
+    fonts: dict,
+) -> int:
+    if not lines:
+        return top
+
+    panel_top = top + NARRATIVE_PANEL_GAP
+    panel_height = _narrative_panel_height(lines, fonts["narrative"])
+    panel_bottom = panel_top + panel_height - NARRATIVE_PANEL_GAP
+
+    draw.rounded_rectangle(
+        (
+            LEFT_MARGIN,
+            panel_top,
+            canvas_width - RIGHT_MARGIN,
+            panel_bottom,
+        ),
+        radius=14,
+        fill="#F8FAFC",
+        outline=BORDER,
+        width=1,
+    )
+
+    x = LEFT_MARGIN + NARRATIVE_PADDING
+    y = panel_top + NARRATIVE_PADDING
+
+    draw.text(
+        (x, y),
+        "Management Summary & Alerts",
+        font=fonts["narrative_heading"],
+        fill=SECTION_HEADER,
+    )
+
+    y += NARRATIVE_HEADING_HEIGHT
+
+    bbox = fonts["narrative"].getbbox("Ag")
+    line_height = (bbox[3] - bbox[1]) + NARRATIVE_LINE_GAP
+    blank_height = max(12, line_height // 2)
+
+    for line in lines:
+        if line == "":
+            y += blank_height
+            continue
+
+        draw.text(
+            (x, y),
+            line,
+            font=fonts["narrative"],
+            fill=TEXT,
+        )
+        y += line_height
+
+    return panel_bottom + SECTION_GAP
+
 def generate_yesterday_morning_report_image(
     report: dict,
     file_name: str = "yesterday_morning_report.png",
+    narrative: str | None = None,
 ) -> dict:
     sections = report["sections"]
     labels = report["labels"]
@@ -469,6 +594,40 @@ def generate_yesterday_morning_report_image(
 
     canvas_width, _ = _column_geometry(3)
 
+    fonts = {
+        "title": load_font(TITLE_SIZE, bold=True),
+        "subtitle": load_font(SUBTITLE_SIZE),
+        "section": load_font(SECTION_SIZE, bold=True),
+        "section_subtitle": load_font(21),
+        "header": load_font(HEADER_SIZE, bold=True),
+        "subheader": load_font(19, bold=True),
+        "body": load_font(BODY_SIZE),
+        "total": load_font(TOTAL_SIZE, bold=True),
+        "footnote": load_font(FOOTNOTE_SIZE),
+        "narrative": load_font(NARRATIVE_SIZE),
+        "narrative_heading": load_font(NARRATIVE_SIZE + 2, bold=True),
+    }
+
+    # Measure/wrap the existing full WhatsApp narrative before the final
+    # canvas is created so the image expands dynamically when alerts grow.
+    scratch_image, scratch_draw = create_canvas(
+        width=canvas_width,
+        height=100,
+        background=BACKGROUND,
+    )
+    narrative_lines = _wrap_text_by_width(
+        draw=scratch_draw,
+        text=narrative or "",
+        font=fonts["narrative"],
+        max_width=(
+            canvas_width
+            - LEFT_MARGIN
+            - RIGHT_MARGIN
+            - 2 * NARRATIVE_PADDING
+        ),
+    )
+    del scratch_image, scratch_draw
+
     one_section_height = (
         SECTION_TITLE_HEIGHT
         + 10
@@ -480,11 +639,16 @@ def generate_yesterday_morning_report_image(
 
     title_area_height = 150
     footer_height = 66
+    narrative_height = _narrative_panel_height(
+        narrative_lines,
+        fonts["narrative"],
+    )
 
     canvas_height = (
         TOP_MARGIN
         + title_area_height
         + one_section_height * 3
+        + narrative_height
         + footer_height
         + BOTTOM_MARGIN
     )
@@ -494,18 +658,6 @@ def generate_yesterday_morning_report_image(
         height=canvas_height,
         background=BACKGROUND,
     )
-
-    fonts = {
-        "title": load_font(TITLE_SIZE, bold=True),
-        "subtitle": load_font(SUBTITLE_SIZE),
-        "section": load_font(SECTION_SIZE, bold=True),
-        "section_subtitle": load_font(21),
-        "header": load_font(HEADER_SIZE, bold=True),
-        "subheader": load_font(19, bold=True),
-        "body": load_font(BODY_SIZE),
-        "total": load_font(TOTAL_SIZE, bold=True),
-        "footnote": load_font(FOOTNOTE_SIZE),
-    }
 
     title = "Auberry Daily Sales Report"
     title_width = get_text_width(
@@ -601,6 +753,14 @@ def generate_yesterday_morning_report_image(
         ],
         current_label="MTD " + labels["mtd_short"],
         comparison_label="LMTD " + labels["lmtd_short"],
+        fonts=fonts,
+    )
+
+    top = _draw_narrative_panel(
+        draw=draw,
+        top=top,
+        canvas_width=canvas_width,
+        lines=narrative_lines,
         fonts=fonts,
     )
 

@@ -587,6 +587,13 @@ def _run_yesterday_sales() -> dict:
                 f"Latest available data: {latest_text}."
             )
 
+        narrative = (
+            format_yesterday_morning_narrative(
+                report,
+                data=data,
+            )
+        )
+
         image_result = (
             generate_yesterday_morning_report_image(
                 report=report,
@@ -594,6 +601,7 @@ def _run_yesterday_sales() -> dict:
                     f"yesterday_morning_"
                     f"{uuid4().hex}.png"
                 ),
+                narrative=narrative,
             )
         )
 
@@ -607,15 +615,13 @@ def _run_yesterday_sales() -> dict:
             )
         )
 
-        narrative = (
-            format_yesterday_morning_narrative(
-                report,
-                data=data,
-            )
+        short_caption = (
+            "📊 Yesterday Sales Report – "
+            + report["labels"]["yesterday_full"]
         )
 
         return _build_media_response(
-            body=narrative,
+            body=short_caption,
             relative_media_url=(
                 relative_media_url
             ),

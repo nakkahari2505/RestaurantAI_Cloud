@@ -628,11 +628,25 @@ def _format_daily_alert_additions(data: dict, as_of_date: date | None = None) ->
 
     if zero_findings:
         zero_lines = ["*Zero-sale products*"]
+
+        # Group all zero-sale findings store-wise for readability.
+        # Presentation only: no findings are filtered or removed.
+        findings_by_store = {}
         for finding in zero_findings:
-            zero_lines.append(
-                f"• In {finding['store']}, {finding['item']} sales were zero "
-                f"for the last 3 operating days."
-            )
+            store = finding["store"]
+            findings_by_store.setdefault(store, []).append(finding)
+
+        for store, store_findings in findings_by_store.items():
+            zero_lines.append(f"*{store}*")
+            for finding in store_findings:
+                zero_lines.append(
+                    f"• {finding['item']} sales were zero "
+                    f"for the last 3 operating days."
+                )
+            zero_lines.append("")
+
+        if zero_lines[-1] == "":
+            zero_lines.pop()
     else:
         zero_lines = ["*Zero-sale products*", "• No zero-sale products."]
 
