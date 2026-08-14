@@ -1,5 +1,8 @@
+import json
 import re
 import shutil
+import threading
+import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -53,6 +56,309 @@ COMPARISON_PATTERN = re.compile(
     rf"({DATE_TOKEN_PATTERN})$",
     re.IGNORECASE,
 )
+
+
+# =========================================================
+# BOUNDED CLARIFICATION CONTEXT
+# =========================================================
+
+# Clarification state is deliberately tiny and short-lived.
+#
+# IMPORTANT:
+# Do not keep this only in a Python module-level dictionary.
+# The WhatsApp endpoint runs work in background tasks and Uvicorn
+# may reload/recreate module state during local development. A tiny
+# file-backed cache makes the second turn deterministic across those
+# boundaries.
+_CLARIFICATION_TTL_SECONDS = 15 * 60
+
+_CLARIFICATION_STATE_PATH = (
+    Path("runtime")
+    / "clarification_context.json"
+)
+
+_CLARIFICATION_STATE_LOCK = (
+    threading.Lock()
+)
+
+
+def _load_clarification_state() -> dict:
+    with _CLARIFICATION_STATE_LOCK:
+        if not _CLARIFICATION_STATE_PATH.exists():
+            return {}
+
+        try:
+            raw = json.loads(
+                _CLARIFICATION_STATE_PATH.read_text(
+                    encoding="utf-8"
+                )
+            )
+        except Exception:
+            return {}
+
+        if not isinstance(
+            raw,
+            dict,
+        ):
+            return {}
+
+        return raw
+
+
+def _save_clarification_state(
+    state: dict,
+) -> None:
+    with _CLARIFICATION_STATE_LOCK:
+        _CLARIFICATION_STATE_PATH.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        _CLARIFICATION_STATE_PATH.write_text(
+            json.dumps(
+                state,
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+
+def _clean_expired_clarifications(
+    state: dict,
+) -> dict:
+    now = time.time()
+
+    cleaned = {}
+
+    for key, value in state.items():
+        if not isinstance(
+            value,
+            dict,
+        ):
+            continue
+
+        created_at = float(
+            value.get(
+                "created_at",
+                0.0,
+            )
+        )
+
+        if (
+            now - created_at
+            <= _CLARIFICATION_TTL_SECONDS
+        ):
+            cleaned[key] = value
+
+    return cleaned
+
+
+def _get_pending_clarification(
+    conversation_id: str,
+) -> dict | None:
+    state = _clean_expired_clarifications(
+        _load_clarification_state()
+    )
+
+    _save_clarification_state(
+        state
+    )
+
+    pending = state.get(
+        conversation_id
+    )
+
+    if isinstance(
+        pending,
+        dict,
+    ):
+        return pending
+
+    return None
+
+
+def _set_pending_clarification(
+    conversation_id: str,
+    original_message: str,
+) -> None:
+    state = _clean_expired_clarifications(
+        _load_clarification_state()
+    )
+
+    state[
+        conversation_id
+    ] = {
+        "original_message": (
+            original_message
+        ),
+        "created_at": time.time(),
+    }
+
+    _save_clarification_state(
+        state
+    )
+
+    print(
+        "Clarification context stored for:",
+        conversation_id,
+    )
+
+
+def _clear_pending_clarification(
+    conversation_id: str,
+) -> None:
+    state = _clean_expired_clarifications(
+        _load_clarification_state()
+    )
+
+    if conversation_id in state:
+        state.pop(
+            conversation_id,
+            None,
+        )
+
+        _save_clarification_state(
+            state
+        )
+
+        print(
+            "Clarification context cleared for:",
+            conversation_id,
+        )
+
+
+def _prepare_conversation_message(
+    message: str,
+    conversation_id: str | None,
+) -> tuple[str, bool]:
+    """
+    Merge one clarification answer back into the ORIGINAL request.
+
+    Example:
+        Original:
+            How is Punjagutta store doing?
+            Can you plot its KPIs for last one year
+
+        Clarification:
+            ADS
+
+        Parser receives:
+            Original request + explicit clarification answer.
+
+    This prevents RestaurantAI from forgetting store, period, grouping
+    or presentation context after asking one question.
+    """
+    if not conversation_id:
+        return message, False
+
+    pending = _get_pending_clarification(
+        conversation_id
+    )
+
+    if not pending:
+        print(
+            "No clarification context found for:",
+            conversation_id,
+        )
+
+        return message, False
+
+    original_message = str(
+        pending.get(
+            "original_message",
+            "",
+        )
+    ).strip()
+
+    if not original_message:
+        _clear_pending_clarification(
+            conversation_id
+        )
+
+        return message, False
+
+    combined_message = (
+        f"{original_message}. "
+        f"The user answered the clarification question with: "
+        f"{message}. "
+        f"Use this answer to fill the missing information in the "
+        f"original request. Preserve all store, time-period, grouping "
+        f"and presentation details already present in the original "
+        f"request."
+    )
+
+    print(
+        "Clarification context restored:",
+        combined_message,
+    )
+
+    return combined_message, True
+
+
+def _finalize_conversation_response(
+    response: dict,
+    conversation_id: str | None,
+    original_incoming_message: str,
+    was_followup: bool,
+) -> dict:
+    """
+    Product rule:
+        Supported + complete -> execute.
+        Supported + one missing essential input -> ask once.
+        After that follow-up -> execute or stop. Never interrogate.
+    """
+    if not conversation_id:
+        response.pop(
+            "_clarification_required",
+            None,
+        )
+
+        return response
+
+    needs_clarification = bool(
+        response.get(
+            "_clarification_required",
+            False,
+        )
+    )
+
+    if needs_clarification:
+        if was_followup:
+            _clear_pending_clarification(
+                conversation_id
+            )
+
+            return _build_text_response(
+                "I understood the request, but I cannot execute it "
+                "reliably in the current version. This is outside my "
+                "current supported scope."
+            )
+
+        _set_pending_clarification(
+            conversation_id=conversation_id,
+            original_message=(
+                original_incoming_message
+            ),
+        )
+
+        response.pop(
+            "_clarification_required",
+            None,
+        )
+
+        return response
+
+    _clear_pending_clarification(
+        conversation_id
+    )
+
+    response.pop(
+        "_clarification_required",
+        None,
+    )
+
+    return response
 
 
 # =========================================================
@@ -303,7 +609,8 @@ def _run_yesterday_sales() -> dict:
 
         narrative = (
             format_yesterday_morning_narrative(
-                report
+                report,
+                data=data,
             )
         )
 
@@ -625,29 +932,13 @@ def _ral_is_ready_for_execution(
 def _build_clarification_response(
     ral_request: dict,
 ) -> dict | None:
-    """
-    Return GPT's clarification question when RAL explicitly
-    requires clarification.
-    """
-    if not ral_request.get(
-        "needs_clarification",
-        False,
-    ):
-        return None
-
-    clarification_question = (
-        ral_request.get(
-            "clarification_question"
-        )
-    )
-
-    if not clarification_question:
+    """V1 rule: never ask a follow-up question. Execute or stop."""
+    if not ral_request.get("needs_clarification", False):
         return None
 
     return _build_text_response(
-        clarification_question
+        "Sorry, I’m unable to answer this question with my current capabilities."
     )
-
 
 def _try_selection_execution(
     user_message: str,
@@ -752,9 +1043,7 @@ def _try_selection_execution(
             )
         ):
             return _build_text_response(
-                "I understood the ranking question, but the "
-                "time period is still unclear. Please specify "
-                "a date or period."
+                "Sorry, I’m unable to answer this question with my current capabilities."
             )
 
         data = load_auberry_workbook()
@@ -1285,6 +1574,7 @@ def _run_management_intelligence() -> dict:
 
 def route_message(
     message: str,
+    conversation_id: str | None = None,
 ) -> dict:
     """
     Route a WhatsApp message.
@@ -1296,18 +1586,39 @@ def route_message(
     3. Specific invalid-command guidance.
     4. Unsupported-request message.
     """
-    normalized_message = " ".join(
+    original_incoming_message = " ".join(
         str(message).strip().split()
+    )
+
+    # V1 is deliberately single-turn: no clarification context is restored.
+    # Every incoming message must stand on its own.
+    was_followup = False
+    normalized_message = " ".join(
+        str(original_incoming_message).strip().split()
     )
 
     normalized_lower = (
         normalized_message.lower()
     )
 
-    if not normalized_message:
+    if not original_incoming_message:
         return _build_text_response(
             "Please send a restaurant business question."
         )
+
+    # Product-master questions (MRP / COGS) are deterministic and do not
+    # enter the sales RAL pipeline.
+    if re.search(r"(?i)\b(mrp|cogs)\b", normalized_message):
+        from services.analytics.product_master_lookup import (
+            answer_product_master_question,
+        )
+
+        product_master_answer = answer_product_master_question(
+            data=load_auberry_workbook(),
+            message=normalized_message,
+        )
+        if product_master_answer is not None:
+            return _build_text_response(product_master_answer)
 
     management_intelligence_commands = {
         "management intelligence",
@@ -1549,7 +1860,14 @@ def route_message(
     )
 
     if selection_response is not None:
-        return selection_response
+        return _finalize_conversation_response(
+            response=selection_response,
+            conversation_id=conversation_id,
+            original_incoming_message=(
+                original_incoming_message
+            ),
+            was_followup=was_followup,
+        )
 
     # =====================================================
     # GENERIC RAL EXECUTION
@@ -1562,7 +1880,14 @@ def route_message(
     )
 
     if generic_response is not None:
-        return generic_response
+        return _finalize_conversation_response(
+            response=generic_response,
+            conversation_id=conversation_id,
+            original_incoming_message=(
+                original_incoming_message
+            ),
+            was_followup=was_followup,
+        )
 
     # =====================================================
     # INVALID FIXED-COMMAND GUIDANCE
@@ -1599,13 +1924,5 @@ def route_message(
     # =====================================================
 
     return _build_text_response(
-        "I understood your message, but I could not safely "
-        "execute it yet.\n\n"
-        "You can ask questions using combinations of:\n\n"
-        "• Sales, Quantity, Transactions, ADS, ADT or APT\n"
-        "• A supported date or period\n"
-        "• Store\n"
-        "• Channel or Aggregator\n"
-        "• Category\n"
-        "• Item"
+        "Sorry, I’m unable to answer this question with my current capabilities."
     )

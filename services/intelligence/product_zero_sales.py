@@ -221,12 +221,18 @@ def _store_operating_dates(
         )
     ]
 
+    # A store is operational only when its total sales for the day are
+    # positive. Merely having rows in the export is not enough.
+    daily_sales = (
+        period.groupby("Date")["Sub Total"]
+        .sum()
+    )
+
     return sorted(
-        period[
-            "Date"
+        daily_sales[
+            daily_sales > 0
         ]
-        .dropna()
-        .unique()
+        .index
         .tolist()
     )
 
@@ -236,21 +242,24 @@ def _latest_operating_days(
     performance_through: date,
     count: int,
 ) -> list[date]:
+    eligible = store_sales[
+        store_sales["Date"] <= performance_through
+    ]
+
+    daily_sales = (
+        eligible.groupby("Date")["Sub Total"]
+        .sum()
+    )
+
     dates = sorted(
-        store_sales.loc[
-            store_sales[
-                "Date"
-            ] <= performance_through,
-            "Date",
+        daily_sales[
+            daily_sales > 0
         ]
-        .dropna()
-        .unique()
+        .index
         .tolist()
     )
 
-    return dates[
-        -count:
-    ]
+    return dates[-count:]
 
 
 # =========================================================

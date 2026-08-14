@@ -618,7 +618,48 @@ def _movement_phrase(change_pct: float | None) -> str:
     return "*unchanged*"
 
 
-def format_yesterday_morning_narrative(report: dict) -> str:
+def _format_daily_alert_additions(data: dict, as_of_date: date | None = None) -> str:
+    """Build the two compact operational alerts appended to the morning message."""
+    from services.intelligence.product_zero_sales import detect_product_zero_sales
+    from services.intelligence.store_three_day_decline import detect_three_day_store_declines
+
+    zero_result = detect_product_zero_sales(data=data, as_of_date=as_of_date)
+    zero_findings = zero_result.get("anomalies", [])
+
+    if zero_findings:
+        zero_lines = ["*Zero-sale products*"]
+        for finding in zero_findings:
+            zero_lines.append(
+                f"• In {finding['store']}, {finding['item']} sales were zero "
+                f"for the last 3 operating days."
+            )
+    else:
+        zero_lines = ["*Zero-sale products*", "• No zero-sale products."]
+
+    decline_result = detect_three_day_store_declines(data=data, as_of_date=as_of_date)
+    decline_findings = decline_result.get("findings", [])
+
+    if decline_findings:
+        decline_lines = ["*3-day store decline*"]
+        for finding in decline_findings:
+            changes = ", ".join(
+                f"{entry['change_pct']:.1f}%"
+                for entry in finding["comparisons"]
+            )
+            decline_lines.append(
+                f"• {finding['store']} was down versus the same weekdays last week "
+                f"for all 3 days ({changes})."
+            )
+    else:
+        decline_lines = [
+            "*3-day store decline*",
+            "• No store declined for all of the last 3 comparable days."
+        ]
+
+    return "\n".join(zero_lines + [""] + decline_lines)
+
+
+def format_yesterday_morning_narrative(report: dict, data: dict | None = None) -> str:
     summary = report["summary"]
     labels = report["labels"]
 
@@ -639,7 +680,7 @@ def format_yesterday_morning_narrative(report: dict) -> str:
         "%Y-%m-%d",
     ).date()
 
-    return (
+    narrative = (
         f"Yesterday ({labels['yesterday_full']}) sales were "
         f"*₹{yesterday_sales}/-*, {yesterday_movement} compared with "
         f"last {lwsd_date.strftime('%A')} "
@@ -651,3 +692,14 @@ def format_yesterday_morning_narrative(report: dict) -> str:
         f"*₹{lmtd_sales}/-*.\n\n"
         f"Detailed report is attached."
     )
+
+    if data is not None:
+        as_of_date = datetime.strptime(
+            report["dates"]["today"], "%Y-%m-%d"
+        ).date()
+        narrative += "\n\n" + _format_daily_alert_additions(
+            data=data,
+            as_of_date=as_of_date,
+        )
+
+    return narrative
