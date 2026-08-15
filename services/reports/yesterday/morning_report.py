@@ -619,59 +619,107 @@ def _movement_phrase(change_pct: float | None) -> str:
 
 
 def _format_daily_alert_additions(data: dict, as_of_date: date | None = None) -> str:
-    """Build the two compact operational alerts appended to the morning message."""
+    """Build the compact operational alerts appended to the morning message."""
     from services.intelligence.product_zero_sales import detect_product_zero_sales
     from services.intelligence.store_three_day_decline import detect_three_day_store_declines
 
-    zero_result = detect_product_zero_sales(data=data, as_of_date=as_of_date)
+    zero_result = detect_product_zero_sales(
+        data=data,
+        as_of_date=as_of_date,
+    )
     zero_findings = zero_result.get("anomalies", [])
 
     if zero_findings:
         zero_lines = ["*Zero-sale products*"]
 
-        # Group all zero-sale findings store-wise for readability.
-        # Presentation only: no findings are filtered or removed.
-        findings_by_store = {}
+        # Group findings store-wise. Inside each store, show the longest
+        # current zero-sales streak first so management sees the oldest issue
+        # before newer 3-day alerts.
+        findings_by_store: dict[str, list[dict]] = {}
         for finding in zero_findings:
             store = finding["store"]
             findings_by_store.setdefault(store, []).append(finding)
 
         for store, store_findings in findings_by_store.items():
+            store_findings.sort(
+                key=lambda finding: (
+                    -int(
+                        finding.get(
+                            "zero_sales_operating_days",
+                            len(finding.get("zero_sales_dates", [])),
+                        )
+                    ),
+                    str(finding.get("item", "")).casefold(),
+                )
+            )
+
             zero_lines.append(f"*{store}*")
+
             for finding in store_findings:
+                zero_days = int(
+                    finding.get(
+                        "zero_sales_operating_days",
+                        len(finding.get("zero_sales_dates", [])),
+                    )
+                )
+
+                day_word = "day" if zero_days == 1 else "days"
+
                 zero_lines.append(
                     f"• {finding['item']} sales were zero "
-                    f"for the last 3 operating days."
+                    f"for the last {zero_days} operating {day_word}."
                 )
+
             zero_lines.append("")
 
         if zero_lines[-1] == "":
             zero_lines.pop()
     else:
-        zero_lines = ["*Zero-sale products*", "• No zero-sale products."]
+        zero_lines = [
+            "*Zero-sale products*",
+            "• No zero-sale products.",
+        ]
 
-    decline_result = detect_three_day_store_declines(data=data, as_of_date=as_of_date)
+    decline_result = detect_three_day_store_declines(
+        data=data,
+        as_of_date=as_of_date,
+    )
     decline_findings = decline_result.get("findings", [])
+    minimum_decline_days = int(
+        decline_result.get("minimum_decline_days", 3)
+    )
 
     if decline_findings:
-        decline_lines = ["*3-day store decline*"]
+        decline_lines = ["*Store decline streak*"]
+
         for finding in decline_findings:
+            decline_days = int(
+                finding.get(
+                    "decline_days",
+                    len(finding.get("comparisons", [])),
+                )
+            )
+
             changes = ", ".join(
                 f"{entry['change_pct']:.1f}%"
                 for entry in finding["comparisons"]
             )
+
+            day_word = "day" if decline_days == 1 else "days"
+
             decline_lines.append(
-                f"• {finding['store']} was down versus the same weekdays last week "
-                f"for all 3 days ({changes})."
+                f"• {finding['store']} was down versus the same weekdays "
+                f"last week for {decline_days} consecutive comparable "
+                f"{day_word} ({changes})."
             )
     else:
         decline_lines = [
-            "*3-day store decline*",
-            "• No store declined for all of the last 3 comparable days."
+            "*Store decline streak*",
+            f"• No store is currently down for {minimum_decline_days} or more "
+            f"consecutive comparable days versus the same weekdays last week.",
         ]
 
     return "\n".join(zero_lines + [""] + decline_lines)
-
 
 def format_yesterday_morning_narrative(report: dict, data: dict | None = None) -> str:
     summary = report["summary"]

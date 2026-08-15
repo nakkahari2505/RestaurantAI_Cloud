@@ -34,6 +34,11 @@ MIN_BASELINE_TOTAL_UNITS: Final[float] = 10.0
 # First V1 anomaly rule.
 ZERO_SALES_OPERATING_DAYS: Final[int] = 3
 
+# Only look back across the latest 30 calendar days, ending yesterday.
+# This caps stale/renamed product history from creating very long zero-sale
+# streaks while preserving the 3-operating-day minimum alert threshold.
+ZERO_SALES_ROLLING_CALENDAR_DAYS: Final[int] = 30
+
 
 # =========================================================
 # COLUMN HELPERS
@@ -523,6 +528,32 @@ def _build_observation(
 # =========================================================
 # PUBLIC PRODUCT ZERO-SALES INTELLIGENCE
 # =========================================================
+# =========================================================
+# PUBLIC PRODUCT ZERO-SALES INTELLIGENCE
+# =========================================================
+
+
+def _trailing_zero_sales_operating_dates(
+    operating_dates: list[date],
+    daily_units: pd.Series,
+) -> list[date]:
+    """Return the trailing zero-sales streak inside the supplied window.
+
+    The supplied operating_dates are already restricted to the rolling
+    30-calendar-day window ending yesterday. Closed/non-operating dates are
+    ignored because the input list contains only store operating dates.
+    """
+    streak_reversed: list[date] = []
+
+    for operating_date in reversed(operating_dates):
+        units = float(daily_units.get(operating_date, 0.0))
+
+        if units > 0:
+            break
+
+        streak_reversed.append(operating_date)
+
+    return list(reversed(streak_reversed))
 
 
 def detect_product_zero_sales(
@@ -530,58 +561,37 @@ def detect_product_zero_sales(
     as_of_date: date | None = None,
 ) -> dict:
     """
-    Detect normally-selling Store x Item combinations that have
-    suddenly recorded zero sales for the latest 3 store operating
-    days.
+    Detect normally-selling Store x Item combinations whose current
+    zero-sales streak has reached at least 3 store operating days.
 
-    V1 logic:
-        1. Performance evaluated through yesterday.
-        2. Store must itself be operating on the anomaly dates.
-        3. The product must qualify as a normal seller over the
-           preceding 28 calendar days:
-             - >= 14 selling days
-             - >= 50% selling frequency across store operating days
-             - >= 10 baseline units/item-lines
-        4. Product must then record zero sales on the latest
-           3 consecutive store operating days.
-        5. Output is phrased as an availability/operational signal,
-           NOT as a proven supply issue.
-
-    Scanner and observer responsibilities intentionally live in this
-    one module to keep the project structure compact.
+    Important rule:
+    - 3 operating days is only the minimum alert threshold.
+    - Zero-sales history is checked only inside the latest 30 calendar days,
+      ending yesterday. RestaurantAI never reaches farther back than this
+      window when calculating the displayed zero-sales streak.
+    - Within that 30-day window, the current consecutive zero-sales streak is
+      measured on store operating days only.
+    - Baseline evidence is measured in the 28 calendar days immediately
+      before the zero-sales streak begins inside this rolling window.
     """
     (
         sales,
         item_column,
         category_column,
         volume_measure,
-    ) = _prepare_product_sales(
-        data
-    )
+    ) = _prepare_product_sales(data)
 
     today = (
         as_of_date
         if as_of_date is not None
-        else datetime.now(
-            IST
-        ).date()
+        else datetime.now(IST).date()
     )
+    performance_through = today - timedelta(days=1)
 
-    performance_through = (
-        today
-        - timedelta(days=1)
-    )
-
-    store_mapping = (
-        _prepare_store_mapping(
-            data
-        )
-    )
+    store_mapping = _prepare_store_mapping(data)
 
     restaurants = sorted(
-        sales[
-            "Restaurant"
-        ]
+        sales["Restaurant"]
         .dropna()
         .astype(str)
         .unique()
@@ -593,80 +603,43 @@ def detect_product_zero_sales(
 
     for restaurant_name in restaurants:
         store_sales = sales[
-            sales[
-                "Restaurant"
-            ].astype(str)
-            == restaurant_name
+            sales["Restaurant"].astype(str) == restaurant_name
         ].copy()
 
-        store_name = (
-            _store_display_name(
-                restaurant_name,
-                store_mapping,
-            )
+        store_name = _store_display_name(
+            restaurant_name,
+            store_mapping,
         )
 
-        zero_dates = (
-            _latest_operating_days(
-                store_sales=store_sales,
-                performance_through=(
-                    performance_through
-                ),
-                count=ZERO_SALES_OPERATING_DAYS,
-            )
+        rolling_window_start = performance_through - timedelta(
+            days=ZERO_SALES_ROLLING_CALENDAR_DAYS - 1
         )
 
-        if (
-            len(zero_dates)
-            < ZERO_SALES_OPERATING_DAYS
-        ):
+        operating_dates = _store_operating_dates(
+            store_sales=store_sales,
+            start_date=rolling_window_start,
+            end_date=performance_through,
+        )
+
+        if len(operating_dates) < ZERO_SALES_OPERATING_DAYS:
             store_summaries.append(
                 {
-                    "store": (
-                        store_name
-                    ),
-                    "status": (
-                        "insufficient_operating_history"
-                    ),
+                    "store": store_name,
+                    "status": "insufficient_operating_history",
                     "latest_operating_days": [
                         value.isoformat()
-                        for value in zero_dates
+                        for value in operating_dates[-ZERO_SALES_OPERATING_DAYS:]
                     ],
                     "anomaly_count": 0,
                 }
             )
             continue
 
-        anomaly_start = min(
-            zero_dates
-        )
-
-        baseline_end = (
-            anomaly_start
-            - timedelta(days=1)
-        )
-
-        baseline_start = (
-            baseline_end
-            - timedelta(
-                days=(
-                    BASELINE_CALENDAR_DAYS
-                    - 1
-                )
-            )
-        )
-
+        # Consider every item that has appeared at this store, but calculate
+        # its zero-sales streak only inside the rolling 30-calendar-day window.
+        # Older history is deliberately ignored for the streak calculation.
         candidate_items = sorted(
-            store_sales.loc[
-                store_sales[
-                    "Date"
-                ].between(
-                    baseline_start,
-                    baseline_end,
-                    inclusive="both",
-                ),
-                item_column,
-            ]
+            store_sales[item_column]
             .dropna()
             .astype(str)
             .unique()
@@ -676,183 +649,102 @@ def detect_product_zero_sales(
         store_anomaly_count = 0
 
         for item_name in candidate_items:
-            baseline = (
-                _baseline_evidence(
-                    store_sales=(
-                        store_sales
-                    ),
-                    item_column=(
-                        item_column
-                    ),
-                    item_name=item_name,
-                    baseline_start=(
-                        baseline_start
-                    ),
-                    baseline_end=(
-                        baseline_end
-                    ),
-                )
+            daily_units = _product_daily_units(
+                store_sales=store_sales,
+                item_column=item_column,
+                item_name=item_name,
             )
 
-            if not baseline[
-                "qualifies_normal_seller"
-            ]:
+            zero_dates = _trailing_zero_sales_operating_dates(
+                operating_dates=operating_dates,
+                daily_units=daily_units,
+            )
+
+            if len(zero_dates) < ZERO_SALES_OPERATING_DAYS:
                 continue
 
-            daily_units = (
-                _product_daily_units(
-                    store_sales=(
-                        store_sales
-                    ),
-                    item_column=(
-                        item_column
-                    ),
-                    item_name=item_name,
-                )
+            anomaly_start = zero_dates[0]
+            baseline_end = anomaly_start - timedelta(days=1)
+            baseline_start = baseline_end - timedelta(
+                days=BASELINE_CALENDAR_DAYS - 1
             )
+
+            baseline = _baseline_evidence(
+                store_sales=store_sales,
+                item_column=item_column,
+                item_name=item_name,
+                baseline_start=baseline_start,
+                baseline_end=baseline_end,
+            )
+
+            if not baseline["qualifies_normal_seller"]:
+                continue
 
             zero_window_units = [
-                float(
-                    daily_units.get(
-                        operating_date,
-                        0.0,
-                    )
-                )
-                for operating_date
-                in zero_dates
+                float(daily_units.get(operating_date, 0.0))
+                for operating_date in zero_dates
             ]
 
-            is_zero_window = all(
-                units <= 0
-                for units
-                in zero_window_units
-            )
-
-            if not is_zero_window:
-                continue
-
-            last_sold_date = (
-                _last_sold_date_before_window(
-                    store_sales=(
-                        store_sales
-                    ),
-                    item_column=(
-                        item_column
-                    ),
-                    item_name=item_name,
-                    anomaly_start=(
-                        anomaly_start
-                    ),
-                )
+            last_sold_date = _last_sold_date_before_window(
+                store_sales=store_sales,
+                item_column=item_column,
+                item_name=item_name,
+                anomaly_start=anomaly_start,
             )
 
             category = None
-
             if category_column is not None:
                 category_rows = (
                     store_sales[
-                        store_sales[
-                            item_column
-                        ] == item_name
-                    ][
-                        category_column
-                    ]
+                        store_sales[item_column] == item_name
+                    ][category_column]
                     .dropna()
                     .astype(str)
                     .str.strip()
                 )
-
                 if not category_rows.empty:
-                    category = (
-                        category_rows.iloc[
-                            -1
-                        ]
-                    )
+                    category = category_rows.iloc[-1]
 
-            priority = (
-                _priority_from_baseline(
-                    baseline
-                )
-            )
+            priority = _priority_from_baseline(baseline)
 
-            observation = (
-                _build_observation(
-                    store_name=(
-                        store_name
-                    ),
-                    item_name=(
-                        item_name
-                    ),
-                    baseline=baseline,
-                    zero_dates=zero_dates,
-                    last_sold_date=(
-                        last_sold_date
-                    ),
-                )
+            observation = _build_observation(
+                store_name=store_name,
+                item_name=item_name,
+                baseline=baseline,
+                zero_dates=zero_dates,
+                last_sold_date=last_sold_date,
             )
 
             anomalies.append(
                 {
-                    "store": (
-                        store_name
-                    ),
-                    "restaurant": (
-                        restaurant_name
-                    ),
-                    "item": (
-                        item_name
-                    ),
-                    "category": (
-                        category
-                    ),
-                    "priority": (
-                        priority
-                    ),
-                    "status": (
-                        "product_zero_sales_anomaly"
-                    ),
+                    "store": store_name,
+                    "restaurant": restaurant_name,
+                    "item": item_name,
+                    "category": category,
+                    "priority": priority,
+                    "status": "product_zero_sales_anomaly",
+                    "zero_sales_operating_days": len(zero_dates),
                     "zero_sales_dates": [
                         value.isoformat()
                         for value in zero_dates
                     ],
-                    "zero_window_units": (
-                        zero_window_units
-                    ),
-                    "last_sold_date": (
-                        last_sold_date
-                    ),
-                    "baseline": (
-                        baseline
-                    ),
-                    "observation": (
-                        observation
-                    ),
+                    "zero_window_units": zero_window_units,
+                    "last_sold_date": last_sold_date,
+                    "baseline": baseline,
+                    "observation": observation,
                 }
             )
-
             store_anomaly_count += 1
 
         store_summaries.append(
             {
-                "store": (
-                    store_name
-                ),
-                "status": (
-                    "scanned"
-                ),
+                "store": store_name,
+                "status": "scanned",
                 "latest_operating_days": [
                     value.isoformat()
-                    for value in zero_dates
+                    for value in operating_dates[-ZERO_SALES_OPERATING_DAYS:]
                 ],
-                "baseline_start": (
-                    baseline_start.isoformat()
-                ),
-                "baseline_end": (
-                    baseline_end.isoformat()
-                ),
-                "anomaly_count": (
-                    store_anomaly_count
-                ),
+                "anomaly_count": store_anomaly_count,
             }
         )
 
@@ -862,84 +754,37 @@ def detect_product_zero_sales(
         "review": 2,
     }
 
+    # Longest current zero-sales streak first within each store. Store order
+    # itself is alphabetical here; the morning-report formatter preserves the
+    # first-seen store grouping and separately sorts each store's products by
+    # streak length descending.
     anomalies.sort(
         key=lambda item: (
-            priority_rank.get(
-                item[
-                    "priority"
-                ],
-                99,
-            ),
-            -float(
-                item[
-                    "baseline"
-                ][
-                    "selling_frequency_pct"
-                ]
-            ),
-            -float(
-                item[
-                    "baseline"
-                ][
-                    "avg_units_per_operating_day"
-                ]
-            ),
-            item[
-                "store"
-            ],
-            item[
-                "item"
-            ],
+            item["store"].casefold(),
+            -int(item["zero_sales_operating_days"]),
+            priority_rank.get(item["priority"], 99),
+            -float(item["baseline"]["selling_frequency_pct"]),
+            -float(item["baseline"]["avg_units_per_operating_day"]),
+            item["item"].casefold(),
         )
     )
 
     return {
-        "observation_type": (
-            "product_zero_sales"
-        ),
-        "as_of_date": (
-            today.isoformat()
-        ),
-        "performance_through": (
-            performance_through.isoformat()
-        ),
-        "item_column": (
-            item_column
-        ),
-        "volume_measure": (
-            volume_measure
-        ),
+        "observation_type": "product_zero_sales",
+        "as_of_date": today.isoformat(),
+        "performance_through": performance_through.isoformat(),
+        "item_column": item_column,
+        "volume_measure": volume_measure,
         "rules": {
-            "baseline_calendar_days": (
-                BASELINE_CALENDAR_DAYS
-            ),
-            "min_baseline_selling_days": (
-                MIN_BASELINE_SELLING_DAYS
-            ),
-            "min_baseline_selling_frequency_pct": (
-                MIN_BASELINE_SELLING_FREQUENCY_PCT
-            ),
-            "min_baseline_total_units": (
-                MIN_BASELINE_TOTAL_UNITS
-            ),
-            "zero_sales_operating_days": (
-                ZERO_SALES_OPERATING_DAYS
-            ),
+            "baseline_calendar_days": BASELINE_CALENDAR_DAYS,
+            "min_baseline_selling_days": MIN_BASELINE_SELLING_DAYS,
+            "min_baseline_selling_frequency_pct": MIN_BASELINE_SELLING_FREQUENCY_PCT,
+            "min_baseline_total_units": MIN_BASELINE_TOTAL_UNITS,
+            "zero_sales_operating_days": ZERO_SALES_OPERATING_DAYS,
+            "zero_sales_rolling_calendar_days": ZERO_SALES_ROLLING_CALENDAR_DAYS,
         },
-        "store_count": (
-            len(
-                restaurants
-            )
-        ),
-        "anomaly_count": (
-            len(
-                anomalies
-            )
-        ),
-        "anomalies": (
-            anomalies
-        ),
-        "stores": (
-            store_summaries
-        ),
+        "store_count": len(restaurants),
+        "anomaly_count": len(anomalies),
+        "anomalies": anomalies,
+        "stores": store_summaries,
     }
