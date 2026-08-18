@@ -1612,19 +1612,20 @@ def route_message(
             "Please send a restaurant business question."
         )
 
-    # Product-master questions (MRP / COGS) are deterministic and do not
-    # enter the sales RAL pipeline.
-    if re.search(r"(?i)\b(mrp|cogs)\b", normalized_message):
-        from services.analytics.product_master_lookup import (
-            answer_product_master_question,
-        )
+    # Product-master questions are deterministic and must be checked
+    # before the semantic/RAL pipeline. The lookup itself owns detection
+    # for MRP / price / COGS / cost / gross-margin wording and typo variants.
+    from services.analytics.product_master_lookup import (
+        answer_product_master_question,
+    )
 
-        product_master_answer = answer_product_master_question(
-            data=load_auberry_workbook(),
-            message=normalized_message,
-        )
-        if product_master_answer is not None:
-            return _build_text_response(product_master_answer)
+    product_master_answer = answer_product_master_question(
+        data=load_auberry_workbook(),
+        message=normalized_message,
+    )
+
+    if product_master_answer is not None:
+        return _build_text_response(product_master_answer)
 
     management_intelligence_commands = {
         "management intelligence",
