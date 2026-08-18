@@ -1627,6 +1627,72 @@ def route_message(
     if product_master_answer is not None:
         return _build_text_response(product_master_answer)
 
+    # =====================================================
+    # MONTHLY TREND CHART
+    # Sales / Transactions / ADS / ADT / APT
+    # Company or one store
+    # Last 1-6 completed calendar months
+    # =====================================================
+    from services.analytics.sales_trend import (
+        get_sales_trend_report,
+        is_sales_trend_question,
+    )
+
+    if is_sales_trend_question(
+        normalized_message
+    ):
+        from services.reports.trends.sales_trend_image import (
+            generate_sales_trend_image,
+        )
+
+        data = load_auberry_workbook()
+
+        try:
+            trend_report = get_sales_trend_report(
+                data=data,
+                message=normalized_message,
+            )
+
+            chart_path = generate_sales_trend_image(
+                trend_report
+            )
+
+            relative_media_url = (
+                _publish_chart_for_whatsapp(
+                    chart_path
+                )
+            )
+
+            return _build_media_response(
+                body=(
+                    "📈 "
+                    + str(
+                        trend_report[
+                            "title"
+                        ]
+                    )
+                ),
+                relative_media_url=(
+                    relative_media_url
+                ),
+            )
+
+        except ValueError as error:
+            return _build_text_response(
+                str(error)
+            )
+
+        except Exception as error:
+            print(
+                "Monthly trend report error:",
+                repr(error),
+            )
+
+            return _build_text_response(
+                "The monthly trend chart could not be generated. "
+                "Please try again."
+            )
+
     management_intelligence_commands = {
         "management intelligence",
     }
