@@ -631,17 +631,34 @@ def detect_product_zero_sales(
                         for value in operating_dates[-ZERO_SALES_OPERATING_DAYS:]
                     ],
                     "anomaly_count": 0,
+                    "latest_menu_reference_date": (
+                        operating_dates[-1].isoformat()
+                        if operating_dates
+                        else None
+                    ),
                 }
             )
             continue
 
-        # Consider every item that has appeared at this store, but calculate
-        # its zero-sales streak only inside the rolling 30-calendar-day window.
-        # Older history is deliberately ignored for the streak calculation.
+        # Use the latest available operating date for THIS STORE as the
+        # current menu/name reference point. This prevents historical product
+        # names (renamed or retired items) from being treated as fresh
+        # zero-sale anomalies merely because their old names stopped appearing.
+        #
+        # Important: this is intentionally store-wise. If one outlet has no
+        # sales on the company-wide latest date, its own latest operating date
+        # becomes the reference date instead.
+        latest_store_operating_date = operating_dates[-1]
+        latest_date_rows = store_sales[
+            store_sales["Date"] == latest_store_operating_date
+        ]
+
         candidate_items = sorted(
-            store_sales[item_column]
+            latest_date_rows[item_column]
             .dropna()
             .astype(str)
+            .str.strip()
+            .loc[lambda values: values != ""]
             .unique()
             .tolist()
         )
@@ -745,6 +762,8 @@ def detect_product_zero_sales(
                     for value in operating_dates[-ZERO_SALES_OPERATING_DAYS:]
                 ],
                 "anomaly_count": store_anomaly_count,
+                "latest_menu_reference_date": latest_store_operating_date.isoformat(),
+                "current_item_count": len(candidate_items),
             }
         )
 
@@ -782,6 +801,7 @@ def detect_product_zero_sales(
             "min_baseline_total_units": MIN_BASELINE_TOTAL_UNITS,
             "zero_sales_operating_days": ZERO_SALES_OPERATING_DAYS,
             "zero_sales_rolling_calendar_days": ZERO_SALES_ROLLING_CALENDAR_DAYS,
+            "candidate_item_reference": "store_latest_operating_date",
         },
         "store_count": len(restaurants),
         "anomaly_count": len(anomalies),

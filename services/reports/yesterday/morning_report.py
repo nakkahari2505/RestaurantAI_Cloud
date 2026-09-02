@@ -655,7 +655,16 @@ def _format_daily_alert_additions(data: dict, as_of_date: date | None = None) ->
 
             zero_lines.append(f"*{store}*")
 
-            for finding in store_findings:
+            # Keep the management alert compact. If a store has more than
+            # five qualifying zero-sale items, show only the three longest
+            # current streaks. Five or fewer are all shown.
+            display_findings = (
+                store_findings[:3]
+                if len(store_findings) > 5
+                else store_findings
+            )
+
+            for finding in display_findings:
                 zero_days = int(
                     finding.get(
                         "zero_sales_operating_days",
